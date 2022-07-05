@@ -174,6 +174,7 @@ class Client:
         try:
             return self.socket.recv(size)
         except:
+            self.disconnected = True
             return b""
 
     def send(self, data: bytes) -> None:
@@ -181,6 +182,7 @@ class Client:
         try:
             self.socket.send(data)
         except:
+            self.disconnected = True
             pass
 
     def tick(self):
@@ -191,13 +193,14 @@ class Client:
         if self.ticks % (20 * 5):
             self.send(pack("B", 1))
 
-        if self.gamemode != 1: return
+        if self.gamemode != 0: return
 
         old_health = self.health
         old_air = self.air
         x, y, z = self.pos
         head_block = self.server.level.get_block(x//32, y//32, z//32)
         body_block = self.server.level.get_block(x//32, (y-51)//32, z//32)
+        feet_block = self.server.level.get_block(x//32, (y-52)//32, z//32)
 
         if head_block == BlockID.WATER:
             if (self.ticks % 20) == 0:
@@ -224,6 +227,7 @@ class Client:
         try:
             op, = unpack("B", self.socket.recv(1))
         except:
+            self.disconnected = True
             return
 
         match op:
@@ -298,14 +302,17 @@ class Client:
             case "survival" | "0" | 0:
                 self.send(pack("BBBBB", 0xa0, 0, 1, 20, 20))
                 self.send(pack("BBBBx", 0xa1, 20, 0, 0))
+                self.gamemode = 0
 
             case "creative" | "1" | 1:
                 self.send(pack("BBBBB", 0xa0, 1, 1, 20, 20))
                 self.send(pack("BBBBx", 0xa1, 20, 0, 0))
+                self.gamemode = 1
 
             case "explore" | "2" | 2:
                 self.send(pack("BBBBB", 0xa0, 1, 0, 20, 20))
                 self.send(pack("BBBBx", 0xa1, 20, 0, 0))
+                self.gamemode = 2
 
             case _:
                 self.message("&cValid gamemodes are: survival, explore, creative")
@@ -887,6 +894,7 @@ class RequestHandler(socketserver.StreamRequestHandler):
 
         while not self.client.disconnected:
             self.client.packet()
+        self.server.state.remove_client(self.client)
 
 
 class ThreadedServer(socketserver.ThreadingTCPServer):
