@@ -279,7 +279,7 @@ class Client:
                     self.server.set_block(self, Vec3(x, y, z), block)
 
             case 8:
-                x, y, z, pitch, yaw = unpack("!xHHHBB", self.recv(9))
+                x, y, z, pitch, yaw = unpack("!xhhhBB", self.recv(9))
                 self.old_pos = self.pos
                 self.old_angle = self.angle
                 self.pos = Vec3(x, y, z)
@@ -321,13 +321,13 @@ class Client:
         self.message(f"&eYour gamemode is set to {mode}")
 
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
-        self.send(pack("!BB64sHHHBB", 7, 255, pad(self.name),
+        self.send(pack("!BB64shhhBB", 7, 255, pad(self.name),
             pos.x * 32, pos.y * 32 + 51, pos.z * 32, angle.x, angle.y))
 
     def teleport(self, pos: Vec3, angle: Vec2) -> None:
         self.pos = pos
         self.angle = angle
-        self.send(pack("!BBHHHBB", 8, 255,
+        self.send(pack("!BBhhhBB", 8, 255,
             pos.x * 32, pos.y * 32 + 51, pos.z * 32, angle.x, angle.y))
 
     def kick(self, reason: str) -> None:
