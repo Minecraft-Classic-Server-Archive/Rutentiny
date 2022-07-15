@@ -444,7 +444,10 @@ class Level:
 
     def noise(self, x: float, y: float) -> float:
         if simplex_available:
-            return opensimplex.noise2(x, y)
+            t = opensimplex.noise2(x + 34.332, y + 4.444) * 1.0
+            t += opensimplex.noise2((x * 2) + 43.112, (y * 2) + 3.143) * 0.1
+            t += opensimplex.noise2((x * 5) + 0.145, (y * 5) + 88.432) * 0.1
+            return t
         else:
             # TODO: make a cc0 noise function that isnt trashgarbage
             # terrible awful fallback noise
@@ -472,10 +475,10 @@ class Level:
             for x in range(0, self.xs):
                 self.edge = ((BlockID.WATER, BlockID.SAND), (self.ys // 2, -2))
 
-                height = self.noise(x / 96, z / 96) * 16
+                height = abs(self.noise(x / 96, z / 96) * 16)
                 height += self.noise(x / 24, z / 24) * 2
-                height -= 6
-                if height < 0: height *= .3
+                height -= 8
+                if height < 0 or height > 8: height *= .3
                 height = int(height + (self.ys//2))
 
                 if height < 0: height = 0
