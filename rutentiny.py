@@ -307,7 +307,7 @@ class Client:
 
     def set_gamemode(self, mode: str | int) -> None:
         if ("RutentoyGamemode", 1) not in self.cpe_exts:
-            self.message("&cYour client doesn't support Rutentoy extensions.")
+            self.message("&cYour client doesn't support RutentoyGamemode.")
             return
 
         match mode:
@@ -896,6 +896,14 @@ class ServerState:
             self.new_map(args[0],
                     Vec3(int(args[1]), int(args[2]), int(args[3])))
             self.system_message(f"Done generating {args[0]} map")
+        elif msg.startswith("/tp "):
+            args = msg[4:].split(" ")
+
+            try:
+                x, y, z = int(args[0]), int(args[1]), int(args[2])
+                c.teleport(Vec3(x, y, z), c.angle)
+            except:
+                c.message("&cUsage: /tp x y z")
         else:
             c.message("&cUnknown command")
 
