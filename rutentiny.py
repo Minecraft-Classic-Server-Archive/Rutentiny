@@ -283,7 +283,7 @@ class Client:
                     self.send(pack("BBB", 44, 0, BlockID.LAVA_STILL))
 
             case 5:
-                x, y, z, mode, block = unpack("!HHHBB", self.recv(8))
+                x, y, z, mode, block = unpack("!hhhBB", self.recv(8))
 
                 if mode == 0:
                     self.server.set_block(self, Vec3(x, y, z), BlockID.NONE)
@@ -573,9 +573,9 @@ class Level:
         if ("EnvColors", 1) in c.cpe_exts:
             for i in range(0, 5):
                 col = self.colors[i]
-                c.socket.send(pack("!BBHHH", 25, i, col[0], col[1], col[2]))
+                c.socket.send(pack("!BBhhh", 25, i, col[0], col[1], col[2]))
 
-        c.socket.send(pack("!BHHH", 4, self.xs, self.ys, self.zs))
+        c.socket.send(pack("!Bhhh", 4, self.xs, self.ys, self.zs))
 
         # allow any blocks because we dont have physics simulation
         if ("BlockPermissions", 1) in c.cpe_exts:
@@ -627,11 +627,11 @@ class ServerState:
 
         for cl in self.clients:
             if c != cl:
-                c.send(pack("!BB64sHHHBB", 7, self.clients.index(cl),
+                c.send(pack("!BB64shhhBB", 7, self.clients.index(cl),
                     pad(cl.name), cl.pos.x, cl.pos.y, cl.pos.z,
                     cl.angle.x, cl.angle.y))
 
-                cl.send(pack("!BB64sHHHBB", 7, self.clients.index(c),
+                cl.send(pack("!BB64shhhBB", 7, self.clients.index(c),
                     pad(c.name), c.pos.x, c.pos.y, c.pos.z,
                     c.angle.x, c.angle.y))
 
@@ -750,7 +750,7 @@ class ServerState:
 
         for cl in self.clients:
             if c == cl: continue
-            cl.send(pack("!BBHHHBB", 8, i, c.pos.x, c.pos.y, c.pos.z,
+            cl.send(pack("!BBhhhBB", 8, i, c.pos.x, c.pos.y, c.pos.z,
                 c.angle.x, c.angle.y))
 
 
@@ -764,7 +764,7 @@ class ServerState:
         self.level.set_block(pos.x, pos.y, pos.z, block)
 
         for cl in self.clients:
-            cl.send(pack("!BHHHB", 6, pos.x, pos.y, pos.z, block))
+            cl.send(pack("!BhhhB", 6, pos.x, pos.y, pos.z, block))
 
     def player_message(self, c: Client, msg: str) -> None:
         ms = f"{c.name}: {msg}"
