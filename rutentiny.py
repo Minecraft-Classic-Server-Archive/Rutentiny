@@ -172,7 +172,19 @@ class Client:
 
     def recv(self, size: int) -> bytes:
         try:
-            return self.socket.recv(size)
+            buffer = bytearray()
+            remain = size
+
+            while remain > 0:
+                tb = self.socket.recv(remain)
+
+                if len(tb) < 1:
+                    raise EOFError
+
+                remain -= len(tb)
+                buffer += tb
+
+            return buffer
         except:
             self.disconnected = True
             return b""
@@ -180,10 +192,9 @@ class Client:
     def send(self, data: bytes) -> None:
         if self.disconnected: return
         try:
-            self.socket.send(data)
+            self.socket.sendall(data)
         except:
             self.disconnected = True
-            pass
 
     def tick(self):
         if self.disconnected: return
@@ -241,8 +252,9 @@ class Client:
                     ver, name, key, pad = unpack("B64s64sB",
                             self.recv(130))
                     self.name = name.strip().decode("ascii")
-                except e:
-                    log(e)
+                except:
+                    log(f"client sent bad login packet")
+                    self.kick("Invalid login packet")
                     return
 
                 if (skey := self.server.config.get("key")):
@@ -370,7 +382,7 @@ class Level:
                 (0x84, 0x7e, 0x87), # block ambient
                 (0xff, 0xff, 0xff), # block diffuse
                 (0xff, 0xff, 0xff), # skybox tint
-        ]
+                ]
         self.seed = int(time.time())
         if simplex_available:
             opensimplex.seed(self.seed)
@@ -401,9 +413,9 @@ class Level:
                 raise ValueError(f"Invalid map format {repr(magic)}")
 
             self.xs, self.ys, self.zs, self.seed = unpack("!iiiq",
-                file.read(calcsize("!iiiq")))
+                    file.read(calcsize("!iiiq")))
             self.edge = (unpack("BB", file.read(2)),
-                (unpack("!ii", file.read(calcsize("!ii")))))
+                    (unpack("!ii", file.read(calcsize("!ii")))))
             self.clouds = unpack("!ii", file.read(calcsize("!ii")))
 
             for i in range(0, 6):
@@ -811,7 +823,7 @@ class ServerState:
                 try:
                     self.system_message(f"Loading {path}")
                     self.load_map(
-                        self.config.get("map_path", ".") + "/" + path)
+                            self.config.get("map_path", ".") + "/" + path)
                     self.system_message(f"Loaded {path}")
                 except:
                     self.system_message(f"Failed to load {path}")
@@ -824,7 +836,7 @@ class ServerState:
                 path = f"{args[1]}.rtm"
                 try:
                     self.level.save(
-                        self.config.get("map_path", ".") + "/" + path)
+                            self.config.get("map_path", ".") + "/" + path)
                     self.system_message(f"Saved as {path}")
                 except:
                     self.system_message(f"Failed to save {path}")
