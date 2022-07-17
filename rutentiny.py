@@ -204,6 +204,18 @@ class Client:
         if self.ticks % (20 * 5):
             self.send(pack("B", 1))
 
+        if self.health < 1:
+            self.health = 20
+            self.armor = 0
+            self.air = 0
+            self.send(pack("BBBBx", 0xa1, self.health, 0, 0))
+            self.teleport(
+                    Vec3(self.server.level.xs//2,
+                        self.server.level.ys+1,
+                        self.server.level.zs//2),
+                    Vec2(0, 0))
+            self.message("&cYou died!")
+
         if self.gamemode != 0: return
 
         old_health = self.health
@@ -219,12 +231,17 @@ class Client:
                     self.air -= 1
                 else:
                     self.health -= 2
-        elif (head_block == BlockID.LAVA
+        else:
+            self.air = 11
+
+        if (head_block == BlockID.LAVA
                 or body_block == BlockID.LAVA):
             if (self.ticks % 10) == 0:
                 self.health -= 4
-        else:
-            self.air = 11
+        elif (head_block == BlockID.FIRE
+                or body_block == BlockID.FIRE):
+            if (self.ticks % 10) == 0:
+                self.health -= 2
 
         self.health = max(self.health, 0)
         self.air = max(self.air, 0)
@@ -232,7 +249,6 @@ class Client:
         if old_health != self.health or old_air != self.air:
             air = 0 if self.air > 10 else self.air
             self.send(pack("BBBBx", 0xa1, self.health, 0, air))
-
 
     def packet(self):
         try:
@@ -320,17 +336,17 @@ class Client:
                 self.send(pack("BBBBB", 0xa0, 1, 1, 20, 20))
                 self.send(pack("BBBBx", 0xa1, 20, 0, 0))
                 self.gamemode = 1
+                self.health = 20
 
             case "explore" | "2" | 2:
                 self.send(pack("BBBBB", 0xa0, 1, 0, 20, 20))
                 self.send(pack("BBBBx", 0xa1, 20, 0, 0))
                 self.gamemode = 2
+                self.health = 20
 
             case _:
                 self.message("&cValid gamemodes are: survival, explore, creative")
                 return
-
-        self.message(f"&eYour gamemode is set to {mode}")
 
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
         self.send(pack("!BB64shhhBB", 7, 255, pad(self.name),
@@ -856,8 +872,9 @@ class ServerState:
 
         if msg.startswith("/me "):
             self.system_message(f"{name} {msg[4:]}")
-        elif msg.startswith("/gamemode "):
+        elif msg.startswith("/gamemode ") and c.oper:
             c.set_gamemode(msg[10:].strip())
+            c.message(f"&eYour gamemode is set to {msg[10:].strip()}")
         elif msg.startswith("/load ") and c.oper:
             path = msg[6:].strip() + ".rtm"
 
@@ -899,7 +916,7 @@ class ServerState:
             self.new_map(args[0],
                     Vec3(int(args[1]), int(args[2]), int(args[3])))
             self.system_message(f"Done generating {args[0]} map")
-        elif msg.startswith("/tp "):
+        elif msg.startswith("/tp ") and c.oper:
             args = msg[4:].split(" ")
 
             try:
