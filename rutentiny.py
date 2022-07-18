@@ -28,7 +28,7 @@ except:
 
 
 def pad(msg: str) -> bytes:
-    return msg.ljust(64).encode("ascii")
+    return msg.ljust(64).encode("cp437")
 
 
 def pad_data(data: bytes) -> bytes:
@@ -44,7 +44,6 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] " + msg)
 
 
-# Most of the time these are used as int vectors anyway
 class Vec3(NamedTuple):
     x: int
     y: int
@@ -267,18 +266,17 @@ class Client:
                 try:
                     ver, name, key, pad = unpack("B64s64sB",
                             self.recv(130))
-                    self.name = name.strip().decode("ascii")
+                    self.name = name.strip().decode("cp437")
+                    self.key = key.strip().decode("ascii")
                 except:
                     log(f"client sent bad login packet")
                     self.kick("Invalid login packet")
                     return
 
                 if (skey := self.server.config.get("key")):
-                    if skey != key.strip().decode("ascii"):
+                    if skey != self.key:
                         self.kick("Invalid password or key")
                         return
-
-                self.key = key.strip().decode("ascii")
 
                 if pad == 0x42:
                     self.uses_cpe = True
@@ -314,8 +312,10 @@ class Client:
                 self.angle = Vec2(pitch, yaw)
 
             case 13:
+                import re
                 (msg,) = unpack("x64s", self.recv(65))
-                msg = msg.strip().decode()
+                msg = msg.strip().decode("cp437")
+                msg = re.sub(r'%([0-9a-f])', r'&\1', msg)
                 self.server.message(self, msg)
 
             case _:
@@ -696,13 +696,13 @@ class ServerState:
         c.send(pack("!B64sI", 17, b"RutentoyGamemode", 1))
         c.send(pack("!B64sI", 17, b"CustomBlocks", 1))
         c.send(pack("!B64sI", 17, b"EnvMapAspect", 1))
-        c.send(pack("!B64sI", 17, b"EmoteFix", 1))
         c.send(pack("!B64sI", 17, b"HackControl", 1))
+        c.send(pack("!B64sI", 17, b"FullCP437", 1))
         cname, extnum = unpack("!x64sH", c.recv(67))
 
         for i in range(0, extnum):
             extname, extver = unpack("!x64sI", c.recv(69))
-            c.cpe_exts.append((extname.strip().decode(), extver))
+            c.cpe_exts.append((extname.strip().decode("ascii"), extver))
 
         # TODO: send fallback blocks to clients that dont support this
         if ("CustomBlocks", 1) in c.cpe_exts:
