@@ -15,6 +15,7 @@ import typing
 import threading
 import socket
 import socketserver
+import textwrap
 from enum import IntEnum
 from gzip import compress, decompress
 from struct import pack, unpack, calcsize
@@ -29,6 +30,20 @@ except:
 
 def pad(msg: str) -> bytes:
     return msg.ljust(64).encode("cp437")
+
+
+msg_pad_wrapper = textwrap.TextWrapper(
+        width=64,
+        subsequent_indent="  ",
+        expand_tabs=False,
+        tabsize=1,
+        replace_whitespace=False)
+def pad_msg(msg: str) -> list[bytes]:
+    from textwrap import wrap
+    buf = []
+    for line in msg_pad_wrapper.wrap(msg):
+        buf.append(pad(line))
+    return buf
 
 
 def pad_data(data: bytes) -> bytes:
@@ -168,6 +183,7 @@ class Client:
         self.cpe_exts: list[tuple[str, int]] = []
         self.oper: bool = False
         self.disconnected: bool = False
+        self.msg_buffer: bytearray = bytearray()
 
     def recv(self, size: int) -> bytes:
         try:
@@ -213,7 +229,7 @@ class Client:
                         self.server.level.ys+1,
                         self.server.level.zs//2),
                     Vec2(0, 0))
-            self.message("&cYou died!")
+            self.message("&cYou died!", 100)
 
         if self.gamemode != 0: return
 
@@ -257,6 +273,7 @@ class Client:
             return
 
         match op:
+            # login
             case 0:
                 if not self.server.level or not self.server.level.ready:
                     self.kick("Level is not ready yet")
@@ -296,6 +313,7 @@ class Client:
                     self.send(pack("BBB", 44, 0, BlockID.WATER_STILL))
                     self.send(pack("BBB", 44, 0, BlockID.LAVA_STILL))
 
+            # block set
             case 5:
                 x, y, z, mode, block = unpack("!hhhBB", self.recv(8))
 
@@ -304,6 +322,7 @@ class Client:
                 else:
                     self.server.set_block(self, Vec3(x, y, z), block)
 
+            # position update
             case 8:
                 x, y, z, pitch, yaw = unpack("!xhhhBB", self.recv(9))
                 self.old_pos = self.pos
@@ -311,12 +330,17 @@ class Client:
                 self.pos = Vec3(x, y, z)
                 self.angle = Vec2(pitch, yaw)
 
+            # message
             case 13:
                 import re
-                (msg,) = unpack("x64s", self.recv(65))
-                msg = msg.strip().decode("cp437")
-                msg = re.sub(r'%([0-9a-f])', r'&\1', msg)
-                self.server.message(self, msg)
+                ext, msg = unpack("B64s", self.recv(65))
+                self.msg_buffer += msg
+
+                if ext == 0:
+                    msg = self.msg_buffer.strip().decode("cp437")
+                    msg = re.sub(r'%([0-9a-f])', r'&\1', msg)
+                    self.msg_buffer = bytearray()
+                    self.server.handle_message(self, msg)
 
             case _:
                 log(f"{self.name}: Unknown opcode {hex(op)}")
@@ -356,15 +380,21 @@ class Client:
         self.pos = pos
         self.angle = angle
         self.send(pack("!BBhhhBB", 8, 255,
-            pos.x * 32, pos.y * 32 + 51, pos.z * 32, angle.x, angle.y))
+            pos.x * 32 + 16, pos.y * 32 + 51, pos.z * 32 + 16,
+            angle.x, angle.y))
 
     def kick(self, reason: str) -> None:
         self.send(b"\x0e" + pad(reason))
         self.server.remove_client(self)
         self.disconnected = True
 
-    def message(self, msg: str) -> None:
-        self.send(pack("BB64s", 13, 0, pad(msg)))
+    def message(self, msg: str, type: int = 0) -> None:
+        if ("MessageTypes", 1) not in self.cpe_exts:
+            type = 0
+
+        chunks = pad_msg(msg)
+        for chunk in chunks:
+            self.send(pack("BB64s", 13, type, chunk))
 
 
 class Level:
@@ -434,8 +464,10 @@ class Level:
                     (unpack("!ii", file.read(calcsize("!ii")))))
             self.clouds = unpack("!ii", file.read(calcsize("!ii")))
 
+            colors = []
             for i in range(0, 6):
-                self.colors.append(unpack("!BBB", file.read(3)))
+                colors.append(unpack("!BBB", file.read(3)))
+            self.colors = tuple(colors)
 
             self.map = bytearray(file.read(self.xs * self.ys * self.zs))
 
@@ -642,7 +674,7 @@ class ServerState:
     def add_client(self, c: Client) -> None:
         if c not in self.clients:
             self.clients.append(c)
-            self.system_message(f"{c.name} joined")
+            self.message(f"{c.name} joined")
 
         for cl in self.clients:
             if c != cl:
@@ -658,7 +690,7 @@ class ServerState:
         if c not in self.clients:
             return
 
-        self.system_message(f"{c.name} left")
+        self.message(f"{c.name} left")
         i = self.clients.index(c)
 
         for c in self.clients:
@@ -692,12 +724,14 @@ class ServerState:
             pad(self.config.get("motd", "My Cool Server")), oper))
 
     def cpe_handshake(self, c: Client) -> None:
-        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 5))
+        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 7))
         c.send(pack("!B64sI", 17, b"RutentoyGamemode", 1))
         c.send(pack("!B64sI", 17, b"CustomBlocks", 1))
         c.send(pack("!B64sI", 17, b"EnvMapAspect", 1))
         c.send(pack("!B64sI", 17, b"HackControl", 1))
         c.send(pack("!B64sI", 17, b"FullCP437", 1))
+        c.send(pack("!B64sI", 17, b"LongerMessages", 1))
+        c.send(pack("!B64sI", 17, b"MessageTypes", 1))
         cname, extnum = unpack("!x64sH", c.recv(67))
 
         for i in range(0, extnum):
@@ -772,7 +806,6 @@ class ServerState:
             cl.send(pack("!BBhhhBB", 8, i, c.pos.x, c.pos.y, c.pos.z,
                 c.angle.x, c.angle.y))
 
-
     def set_block(self, c: Client, pos: Vec3, block: BlockID) -> None:
         match block:
             case BlockID.WATER_STILL:
@@ -785,18 +818,16 @@ class ServerState:
         for cl in self.clients:
             cl.send(pack("!BhhhB", 6, pos.x, pos.y, pos.z, block))
 
-    def player_message(self, c: Client, msg: str) -> None:
-        ms = f"{c.name}: {msg}"
-        mb = pad(ms)
-
-        log(ms)
-        for c in self.clients:
-            c.send(pack("Bx64s", 13, mb))
-
-    def system_message(self, msg: str) -> None:
+    def message(self, msg: str, type: int = 0) -> None:
         log(msg)
+        chunks = pad_msg(msg)
+
+        # don't use Client.message so we only have to pad_msg once
         for c in self.clients:
-            c.send(pack("BB64s", 13, 255, pad(msg)))
+            for chunk in chunks:
+                c.send(pack("BB64s", 13,
+                    type if ("MessageTypes", 1) in c.cpe_exts else 0,
+                    chunk))
 
     def sys_command(self, args: list[str]) -> None:
         if len(args) < 1:
@@ -812,7 +843,7 @@ class ServerState:
         match args[0]:
             case "say":
                 if len(args) < 2: return
-                self.system_message(" ".join(args[1:]))
+                self.message(" ".join(args[1:]))
 
             case "stop":
                 if len(args) < 2:
@@ -840,12 +871,11 @@ class ServerState:
 
                 path = f"{args[1]}.rtm"
                 try:
-                    self.system_message(f"Loading {path}")
                     self.load_map(
                             self.config.get("map_path", ".") + "/" + path)
-                    self.system_message(f"Loaded {path}")
+                    self.message(f"Loaded {path}")
                 except:
-                    self.system_message(f"Failed to load {path}")
+                    self.message(f"Failed to load {path}")
 
             case "save":
                 if len(args) < 2 or len(args) > 2:
@@ -856,22 +886,20 @@ class ServerState:
                 try:
                     self.level.save(
                             self.config.get("map_path", ".") + "/" + path)
-                    self.system_message(f"Saved as {path}")
+                    self.message(f"Saved as {path}")
                 except:
-                    self.system_message(f"Failed to save {path}")
+                    self.message(f"Failed to save {path}")
 
             case _:
                 warn(f"Unknown command {args[0]}")
 
-    def message(self, c: Client, msg: str) -> None:
+    def handle_message(self, c: Client, msg: str) -> None:
         if msg[0] != "/":
-            self.player_message(c, msg)
+            self.message(f"{c.name}: {msg}")
             return
 
-        name = c.name
-
         if msg.startswith("/me "):
-            self.system_message(f"{name} {msg[4:]}")
+            self.message(f"{c.name} {msg[4:]}")
         elif msg.startswith("/gamemode ") and c.oper:
             c.set_gamemode(msg[10:].strip())
             c.message(f"&eYour gamemode is set to {msg[10:].strip()}")
@@ -883,9 +911,8 @@ class ServerState:
                 return
 
             try:
-                self.system_message(f"Loading {path}")
                 self.load_map(self.config.get("map_path", ".") + "/" + path)
-                self.system_message(f"Loaded {path}")
+                self.message(f"Loaded {path}")
             except:
                 c.message(f"&cFailed to load \"{path}\"")
         elif msg.startswith("/save ") and c.oper:
@@ -897,9 +924,9 @@ class ServerState:
 
             try:
                 self.level.save(self.config.get("map_path", ".") + "/" + path)
-                self.system_message(f"Saved as {path}")
+                self.message(f"Saved as {path}")
             except:
-                self.system_message(f"Failed to save {path}")
+                self.message(f"Failed to save {path}")
         elif msg.startswith("/new ") and c.oper:
             args = msg[5:].split(" ")
             if len(args) < 4:
@@ -912,10 +939,10 @@ class ServerState:
                 c.message("&cMap extents cannot exceed 1024 in any direction")
                 return
 
-            self.system_message(f"Generating new {args[0]} map")
+            self.message(f"Generating new {args[0]} map")
             self.new_map(args[0],
                     Vec3(int(args[1]), int(args[2]), int(args[3])))
-            self.system_message(f"Done generating {args[0]} map")
+            self.message(f"Done generating {args[0]} map")
         elif msg.startswith("/tp ") and c.oper:
             args = msg[4:].split(" ")
 
