@@ -59,6 +59,11 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] " + msg)
 
 
+def softmax(a: float, b: float, e: float) -> float:
+    from math import sqrt
+    return ((a + b) + (sqrt((a - b)**2) + e)) / 2
+
+
 class Vec3(NamedTuple):
     x: int
     y: int
@@ -476,12 +481,19 @@ class Level:
     def _index(self, x: int, y: int, z: int) -> int:
         return (y * self.zs + z) * self.xs + x
 
-    def set_block(self, x: int, y: int, z: int, block: BlockID) -> None:
+    def _set_block(self, x: int, y:int, z: int, block: BlockID) -> None:
         i = self._index(x, y, z)
         if i < 0 or i >= len(self.map):
             return
 
         self.map[i] = block
+
+    def set_block(self, x: int, y: int, z: int, block: BlockID) -> None:
+        self._set_block(x, y, z, block)
+
+        if self.ready:
+            for cl in self.server.clients:
+                cl.send(pack("!BhhhB", 6, x, y, z, block))
 
     def get_block(self, x: int, y: int, z: int) -> BlockID:
         i = self._index(x, y, z)
@@ -514,6 +526,77 @@ class Level:
 
             out = lerp(a, b, t)
             return (out * 2) - 1
+
+    def tree(self, rx: int, ry: int, rz: int) -> None:
+        from random import randrange
+        height = randrange(4, 8)
+
+        y = 1
+        for x in range(-2, 3):
+            for z in range(-2, 3):
+                self.set_block(x+rx, y+ry+(height-3), z+rz, BlockID.LEAVES)
+        y = 2
+        for x in range(-2, 3):
+            for z in range(-2, 3):
+                self.set_block(x+rx, y+ry+(height-3), z+rz, BlockID.LEAVES)
+        y = 3
+        for x in range(-1, 2):
+            for z in range(-1, 2):
+                self.set_block(x+rx, y+ry+(height-3), z+rz, BlockID.LEAVES)
+
+        for y in range(0, height):
+            self.set_block(rx, ry + y, rz, BlockID.LOG)
+
+    def generate_hills(self):
+        from math import sqrt
+        from random import randrange
+
+        self.ready = False
+        log("Generating Hills map")
+        for z in range(0, self.zs):
+            for x in range(0, self.xs):
+                self.edge = ((BlockID.WATER, BlockID.BEDROCK), (self.ys // 2, -2))
+
+                height = softmax(0, self.noise(x / 128, z / 128) * 32, 0.5)
+                height += self.noise(x / 64, z / 64) * 4
+
+                river = self.noise(x/256, z/256)
+                if height < 8 and river > 0.3 and river < 0.6:
+                    height -= 4
+                height = int(height + 3 + (self.ys//2))
+
+                if height < 0: height = 0
+                if height > self.ys: height = self.ys
+
+                for y in range(0, self.ys//2):
+                    self.set_block(x, y, z, BlockID.WATER)
+
+                for y in range(0, height - 3):
+                    self.set_block(x, y, z, BlockID.STONE)
+
+                if height > self.ys - 16:
+                    for y in range(height - 3, height - 1):
+                        self.set_block(x, y, z, BlockID.STONE)
+
+                    self.set_block(x, height-1, z, BlockID.GRAVEL)
+                else:
+                    for y in range(height - 3, height - 1):
+                        self.set_block(x, y, z, BlockID.DIRT)
+
+                    if height-1 < (self.ys//2):
+                        self.set_block(x, height-1, z, BlockID.SAND)
+                    else:
+                        self.set_block(x, height-1, z, BlockID.GRASS)
+
+                if height > self.ys//2 and height < self.ys - 16:
+                    if self.noise(x/64, z/64) > 0.5:
+                        if randrange(0, 64) == 0:
+                            self.tree(x, height, z)
+
+            if z % 16 == 0:
+                log(f"{int((z / self.zs) * 100)}% generated")
+        log("Map generation done")
+        self.ready = True
 
     def generate_islands(self):
         from math import sqrt
@@ -771,6 +854,9 @@ class ServerState:
             case "islands":
                 self.level.generate_islands()
 
+            case "hills":
+                self.level.generate_hills()
+
             case "flatgrass":
                 self.level.generate_flatgrass()
 
@@ -813,7 +899,7 @@ class ServerState:
             case BlockID.LAVA_STILL:
                 block = BlockID.LAVA
 
-        self.level.set_block(pos.x, pos.y, pos.z, block)
+        self.level._set_block(pos.x, pos.y, pos.z, block)
 
         for cl in self.clients:
             cl.send(pack("!BhhhB", 6, pos.x, pos.y, pos.z, block))
@@ -951,6 +1037,8 @@ class ServerState:
                 c.teleport(Vec3(x, y, z), c.angle)
             except:
                 c.message("&cUsage: /tp x y z")
+        elif msg.startswith("/tree"):
+            self.level.tree(c.pos.x//32, c.pos.y//32-1, c.pos.z//32)
         else:
             c.message("&cUnknown command")
 
