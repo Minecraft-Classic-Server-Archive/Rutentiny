@@ -986,7 +986,7 @@ class ServerState:
 
         if msg.startswith("/me "):
             self.message(f"{c.name} {msg[4:]}")
-        elif msg.startswith("/gamemode ") and c.oper:
+        elif msg.startswith("/gamemode "):
             c.set_gamemode(msg[10:].strip())
             c.message(f"&eYour gamemode is set to {msg[10:].strip()}")
         elif msg.startswith("/load ") and c.oper:
@@ -1029,7 +1029,7 @@ class ServerState:
             self.new_map(args[0],
                     Vec3(int(args[1]), int(args[2]), int(args[3])))
             self.message(f"Done generating {args[0]} map")
-        elif msg.startswith("/tp ") and c.oper:
+        elif msg.startswith("/tp ") and (c.gamemode == 1 or c.oper):
             args = msg[4:].split(" ")
 
             try:
@@ -1037,7 +1037,7 @@ class ServerState:
                 c.teleport(Vec3(x, y, z), c.angle)
             except:
                 c.message("&cUsage: /tp x y z")
-        elif msg.startswith("/tree"):
+        elif msg.startswith("/tree") and c.gamemode == 1:
             self.level.tree(c.pos.x//32, c.pos.y//32-1, c.pos.z//32)
         else:
             c.message("&cUnknown command")
