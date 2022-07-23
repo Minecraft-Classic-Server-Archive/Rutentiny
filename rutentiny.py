@@ -9,6 +9,7 @@ except:
     print("Rutentiny requires Python 3.10 or later")
     exit(1)
 
+import zlib
 import gzip
 import time
 import typing
@@ -17,7 +18,6 @@ import socket
 import socketserver
 import textwrap
 from enum import IntEnum
-from gzip import compress, decompress
 from struct import pack, unpack, calcsize
 from typing import NamedTuple, Optional, Iterator
 
@@ -57,11 +57,6 @@ def chunk_iter(data: bytes) -> Iterator[bytes]:
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] " + msg)
-
-
-def softmax(a: float, b: float, e: float) -> float:
-    from math import sqrt
-    return ((a + b) + (sqrt((a - b)**2) + e)) / 2
 
 
 class Vec3(NamedTuple):
@@ -505,7 +500,7 @@ class Level:
     def noise(self, x: float, y: float) -> float:
         if simplex_available:
             t = opensimplex.noise2(x + 34.332, y + 4.444) * 1.0
-            t += opensimplex.noise2((x * 2) + 43.112, (y * 2) + 3.143) * 0.1
+            #t += opensimplex.noise2((x * 2) + 43.112, (y * 2) + 3.143) * 0.1
             t += opensimplex.noise2((x * 5) + 0.145, (y * 5) + 88.432) * 0.1
             return t
         else:
@@ -548,25 +543,35 @@ class Level:
             self.set_block(rx, ry + y, rz, BlockID.LOG)
 
     def generate_hills(self):
-        from math import sqrt
         from random import randrange
 
         self.ready = False
         log("Generating Hills map")
+        self.edge = ((BlockID.WATER, BlockID.BEDROCK), (self.ys // 2, -2))
+
         for z in range(0, self.zs):
             for x in range(0, self.xs):
-                self.edge = ((BlockID.WATER, BlockID.BEDROCK), (self.ys // 2, -2))
-
-                height = softmax(0, self.noise(x / 128, z / 128) * 32, 0.5)
+                height = max(0, self.noise(x / 128, z / 128) * 32)
                 height += self.noise(x / 64, z / 64) * 4
 
-                river = self.noise(x/256, z/256)
-                if height < 8 and river > 0.3 and river < 0.6:
+                sink = abs(self.noise(x/256, z/256))
+                spikes = self.noise(-x/256, -z/256)
+
+                riverswirl = self.noise(z/32, x/32) * 2
+                river = self.noise((z+riverswirl)/256, (x+riverswirl)/512)
+
+                if height < 8 and sink > 0.3 and sink < 0.6:
                     height -= 4
+
+                if river < 0.05 and river > -0.05:
+                    height = -6
+
+                height += max(0, (spikes - 0.5)) * 128
+
                 height = int(height + 3 + (self.ys//2))
 
                 if height < 0: height = 0
-                if height > self.ys: height = self.ys
+                if height > self.ys: height = self.ys - (height - self.ys)
 
                 for y in range(0, self.ys//2):
                     self.set_block(x, y, z, BlockID.WATER)
@@ -574,22 +579,16 @@ class Level:
                 for y in range(0, height - 3):
                     self.set_block(x, y, z, BlockID.STONE)
 
-                if height > self.ys - 16:
-                    for y in range(height - 3, height - 1):
-                        self.set_block(x, y, z, BlockID.STONE)
+                for y in range(height - 3, height - 1):
+                    self.set_block(x, y, z, BlockID.DIRT)
 
-                    self.set_block(x, height-1, z, BlockID.GRAVEL)
+                if height-1 < (self.ys//2):
+                    self.set_block(x, height-1, z, BlockID.SAND)
                 else:
-                    for y in range(height - 3, height - 1):
-                        self.set_block(x, y, z, BlockID.DIRT)
+                    self.set_block(x, height-1, z, BlockID.GRASS)
 
-                    if height-1 < (self.ys//2):
-                        self.set_block(x, height-1, z, BlockID.SAND)
-                    else:
-                        self.set_block(x, height-1, z, BlockID.GRASS)
-
-                if height > self.ys//2 and height < self.ys - 16:
-                    if self.noise(x/64, z/64) > 0.5:
+                if height > self.ys//2 and height < self.ys-16:
+                    if self.noise(x/64, z/64) > 0.3:
                         if randrange(0, 64) == 0:
                             self.tree(x, height, z)
 
@@ -599,13 +598,12 @@ class Level:
         self.ready = True
 
     def generate_islands(self):
-        from math import sqrt
         self.ready = False
         log("Generating Islands map")
+        self.edge = ((BlockID.WATER, BlockID.SAND), (self.ys // 2, -2))
+
         for z in range(0, self.zs):
             for x in range(0, self.xs):
-                self.edge = ((BlockID.WATER, BlockID.SAND), (self.ys // 2, -2))
-
                 height = abs(self.noise(x / 96, z / 96) * 16)
                 height += self.noise(x / 24, z / 24) * 2
                 height -= 8
@@ -627,6 +625,50 @@ class Level:
                     self.set_block(x, height-1, z, BlockID.SAND)
                 else:
                     self.set_block(x, height-1, z, BlockID.GRASS)
+
+            if z % 16 == 0:
+                log(f"{int((z / self.zs) * 100)}% generated")
+        log("Map generation done")
+        self.ready = True
+
+    def generate_hell(self):
+        from random import randrange
+        self.ready = False
+        log("Generating Hell map")
+        self.edge = ((BlockID.LAVA, BlockID.DIRT), (self.ys // 2, -2))
+        self.colors = [
+                (0x84, 0x1b, 0x1b), # sky
+                (0x72, 0x17, 0x17), # clouds
+                (0x84, 0x1b, 0x1b), # fog
+                (0x12, 0x04, 0x04), # block ambient
+                (0x5f, 0x1f, 0x1f), # block diffuse
+                (0xff, 0xff, 0xff), # skybox tint
+                ]
+
+        for z in range(0, self.zs):
+            for x in range(0, self.xs):
+                height = abs(self.noise(x / 96, z / 96) * 24)
+                height += self.noise(x / 24, z / 24) * 2
+                height -= 8
+                height = int(height + (self.ys//2))
+
+                if height < 0: height = 0
+                if height > self.ys: height = self.ys
+
+                for y in range(0, self.ys//2):
+                    self.set_block(x, y, z, BlockID.LAVA)
+
+                for y in range(0, height - 3):
+                    self.set_block(x, y, z, BlockID.STONE)
+                for y in range(height - 3, height - 1):
+                    self.set_block(x, y, z, BlockID.DIRT)
+
+                self.set_block(x, height-1, z, BlockID.DIRT)
+
+                if height > self.ys//2:
+                    if self.noise(x/64, z/64) > 0.3:
+                        if randrange(0, 64) == 0:
+                            self.tree(x, height, z)
 
             if z % 16 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
@@ -687,29 +729,40 @@ class Level:
         log("Map generation done")
         self.ready = True
 
-    def send_to_client(self, c: Client):
-        c.socket.send(pack("B", 2))
+    def send_to_client(self, c: Client) -> None:
+        fast = ("FastMap", 1) in c.cpe_exts
+
+        if fast:
+            c.send(pack("!Bi", 2, len(self.map)))
+        else:
+            c.send(pack("B", 2))
 
         if ("EnvMapAspect", 1) in c.cpe_exts:
             # edge blocks
-            c.socket.send(pack("!BBi", 41, 0, self.edge[0][1]))
-            c.socket.send(pack("!BBi", 41, 9, self.edge[1][1]))
-            c.socket.send(pack("!BBi", 41, 1, self.edge[0][0]))
-            c.socket.send(pack("!BBi", 41, 2, self.edge[1][0]))
+            c.send(pack("!BBi", 41, 0, self.edge[0][1]))
+            c.send(pack("!BBi", 41, 9, self.edge[1][1]))
+            c.send(pack("!BBi", 41, 1, self.edge[0][0]))
+            c.send(pack("!BBi", 41, 2, self.edge[1][0]))
 
             # clouds
-            c.socket.send(pack("!BBi", 41, 3, self.clouds[0]))
-            c.socket.send(pack("!BBi", 41, 5, self.clouds[1]))
+            c.send(pack("!BBi", 41, 3, self.clouds[0]))
+            c.send(pack("!BBi", 41, 5, self.clouds[1]))
 
-        for b in chunk_iter(compress(pack("!i", len(self.map)) + self.map)):
-            c.socket.send(pack("!BH", 3, len(b)) + pad_data(b) + b"\0")
+        if fast:
+            m = zlib.compressobj(wbits=-15)
+            cb = m.compress(self.map) + m.flush(zlib.Z_FINISH)
+            for b in chunk_iter(cb):
+                c.send(pack("!BH", 3, len(b)) + pad_data(b) + b"\0")
+        else:
+            for b in chunk_iter(gzip.compress(pack("!i", len(self.map)) + self.map)):
+                c.send(pack("!BH", 3, len(b)) + pad_data(b) + b"\0")
 
         if ("EnvColors", 1) in c.cpe_exts:
             for i in range(0, 5):
                 col = self.colors[i]
-                c.socket.send(pack("!BBhhh", 25, i, col[0], col[1], col[2]))
+                c.send(pack("!BBhhh", 25, i, col[0], col[1], col[2]))
 
-        c.socket.send(pack("!Bhhh", 4, self.xs, self.ys, self.zs))
+        c.send(pack("!Bhhh", 4, self.xs, self.ys, self.zs))
 
         # allow any blocks because we dont have physics simulation
         if ("BlockPermissions", 1) in c.cpe_exts:
@@ -807,7 +860,7 @@ class ServerState:
             pad(self.config.get("motd", "My Cool Server")), oper))
 
     def cpe_handshake(self, c: Client) -> None:
-        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 7))
+        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 8))
         c.send(pack("!B64sI", 17, b"RutentoyGamemode", 1))
         c.send(pack("!B64sI", 17, b"CustomBlocks", 1))
         c.send(pack("!B64sI", 17, b"EnvMapAspect", 1))
@@ -815,6 +868,7 @@ class ServerState:
         c.send(pack("!B64sI", 17, b"FullCP437", 1))
         c.send(pack("!B64sI", 17, b"LongerMessages", 1))
         c.send(pack("!B64sI", 17, b"MessageTypes", 1))
+        c.send(pack("!B64sI", 17, b"FastMap", 1))
         cname, extnum = unpack("!x64sH", c.recv(67))
 
         for i in range(0, extnum):
@@ -856,6 +910,9 @@ class ServerState:
 
             case "hills":
                 self.level.generate_hills()
+
+            case "hell":
+                self.level.generate_hell()
 
             case "flatgrass":
                 self.level.generate_flatgrass()
