@@ -140,6 +140,10 @@ class BlockID(IntEnum):
     CRATE = 64,
     STONE_BRICKS = 65,
 
+    # example blocks to replace still water and lava
+    UNUSED_FLUID = 9
+    TOXIC_SLIME = 11
+
     def cpe_fallback(block: "BlockID") -> "BlockID":
         match block:
             case BlockID.COBBLESTONE_SLAB: return BlockID.SMOOTH_STONE_SLAB
@@ -258,6 +262,10 @@ class Client:
                 or body_block == BlockID.LAVA):
             if (self.ticks % 10) == 0:
                 self.health -= 4
+        elif (head_block == BlockID.TOXIC_SLIME
+                or body_block == BlockID.TOXIC_SLIME):
+            if (self.ticks % 10) == 0:
+                self.health -= 2
         elif (head_block == BlockID.FIRE
                 or body_block == BlockID.FIRE):
             if (self.ticks % 10) == 0:
@@ -313,9 +321,22 @@ class Client:
                     Vec2(0, 0))
                 self.server.add_client(self)
 
-                if ("InventoryOrder", 1) in self.cpe_exts:
-                    self.send(pack("BBB", 44, 0, BlockID.WATER_STILL))
-                    self.send(pack("BBB", 44, 0, BlockID.LAVA_STILL))
+                if ("BlockDefinitions", 1) in self.cpe_exts:
+                    self.send(pack("BB64sBBBBBBBBBBBBBB",
+                        35,                     # DefineBlock packet
+                        BlockID.TOXIC_SLIME,    # block id
+                        b"Toxic Slime",         # name
+                        5,                      # collision mode
+                        96,                     # speed modifier
+                        46, 46, 46,             # top, side, bottom textures
+                        0,                      # translucent
+                        0,                      # walk noise
+                        1,                      # fullbright
+                        16,                     # voxel height
+                        3,                      # transparency mode
+                        191,                    # fog density
+                        # fog rgb
+                        0x99, 0xe5, 0x50))
 
             # block set
             case 5:
@@ -958,12 +979,6 @@ class ServerState:
                 cl.send(pack("!Bb64s", 29, i, models))
 
     def set_block(self, c: Client, pos: Vec3, block: BlockID) -> None:
-        match block:
-            case BlockID.WATER_STILL:
-                block = BlockID.WATER
-            case BlockID.LAVA_STILL:
-                block = BlockID.LAVA
-
         self.level._set_block(pos.x, pos.y, pos.z, block)
 
         for cl in self.clients:
