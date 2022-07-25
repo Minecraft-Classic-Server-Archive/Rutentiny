@@ -176,7 +176,8 @@ class Client:
         self.old_pos: Vec3 = self.pos
         self.old_angle: Vec2 = self.angle
         self.health: int = 20
-        self.air: int = 11
+        self.air: int = -1
+        self.armor: int = -1
         self.gamemode: int = 1
         self.ticks: int = 0
         self.uses_cpe: bool = False
@@ -221,9 +222,9 @@ class Client:
 
         if self.health < 1:
             self.health = 20
-            self.armor = 0
-            self.air = 0
-            self.send(pack("BBBBx", 0xa1, self.health, 0, 0))
+            self.armor = -1
+            self.air = -1
+            self.send(pack("Bbbbx", 0xa1, self.health, self.armor, self.air))
             self.teleport(
                     Vec3(self.server.level.xs//2,
                         self.server.level.ys+1,
@@ -234,6 +235,7 @@ class Client:
         if self.gamemode != 0: return
 
         old_health = self.health
+        old_armor = self.armor
         old_air = self.air
         x, y, z = self.pos
         head_block = self.server.level.get_block(x//32, y//32, z//32)
@@ -241,13 +243,16 @@ class Client:
         feet_block = self.server.level.get_block(x//32, (y-52)//32, z//32)
 
         if head_block == BlockID.WATER:
-            if (self.ticks % 20) == 0:
+            if self.air < 0:
+                self.air = 21
+
+            if (self.ticks % 10) == 0:
                 if self.air > 0:
                     self.air -= 1
-                else:
+                elif (self.ticks % 20) == 0:
                     self.health -= 2
         else:
-            self.air = 11
+            self.air = -1
 
         if (head_block == BlockID.LAVA
                 or body_block == BlockID.LAVA):
@@ -259,11 +264,11 @@ class Client:
                 self.health -= 2
 
         self.health = max(self.health, 0)
-        self.air = max(self.air, 0)
 
-        if old_health != self.health or old_air != self.air:
-            air = 0 if self.air > 10 else self.air
-            self.send(pack("BBBBx", 0xa1, self.health, 0, air))
+        if old_health != self.health \
+                or old_air != self.air \
+                or old_armor != self.armor:
+            self.send(pack("Bbbbx", 0xa1, self.health, self.armor, self.air))
 
     def packet(self):
         try:
@@ -279,7 +284,6 @@ class Client:
                     self.kick("Level is not ready yet")
                     return
 
-                # TODO: figure out why this chokes occasionally
                 try:
                     ver, name, key, pad = unpack("B64s64sB",
                             self.recv(130))
@@ -350,23 +354,22 @@ class Client:
             self.message("&cYour client doesn't support RutentoyGamemode.")
             return
 
+        self.health = 20
+        self.send(pack("Bbbbx", 0xa1, self.health,
+            self.armor, self.air))
+
         match mode:
             case "survival" | "0" | 0:
-                self.send(pack("BBBBB", 0xa0, 0, 1, 20, 20))
-                self.send(pack("BBBBx", 0xa1, 20, 0, 0))
+                self.send(pack("BBB", 0xa0, 0, 1))
                 self.gamemode = 0
 
             case "creative" | "1" | 1:
-                self.send(pack("BBBBB", 0xa0, 1, 1, 20, 20))
-                self.send(pack("BBBBx", 0xa1, 20, 0, 0))
+                self.send(pack("BBB", 0xa0, 1, 1))
                 self.gamemode = 1
-                self.health = 20
 
             case "explore" | "2" | 2:
-                self.send(pack("BBBBB", 0xa0, 1, 0, 20, 20))
-                self.send(pack("BBBBx", 0xa1, 20, 0, 0))
+                self.send(pack("BBB", 0xa0, 1, 0))
                 self.gamemode = 2
-                self.health = 20
 
             case _:
                 self.message("&cValid gamemodes are: survival, explore, creative")
@@ -949,6 +952,19 @@ class ServerState:
             cl.send(pack("!BBhhhBB", 8, i, c.pos.x, c.pos.y, c.pos.z,
                 c.angle.x, c.angle.y))
 
+    def set_playermodel(self, c: Client, model: str) -> None:
+        i = self.clients.index(c)
+        models = pad(model)
+
+        for cl in self.clients:
+            if ("ChangeModel", 1) not in c.cpe_exts:
+                continue
+
+            if c == cl:
+                cl.send(pack("!Bb64s", 29, -1, models))
+            else:
+                cl.send(pack("!Bb64s", 29, i, models))
+
     def set_block(self, c: Client, pos: Vec3, block: BlockID) -> None:
         match block:
             case BlockID.WATER_STILL:
@@ -1096,6 +1112,8 @@ class ServerState:
                 c.message("&cUsage: /tp x y z")
         elif msg.startswith("/tree") and c.gamemode == 1:
             self.level.tree(c.pos.x//32, c.pos.y//32-1, c.pos.z//32)
+        elif msg.startswith("/model "):
+            self.set_playermodel(c, msg[7:])
         else:
             c.message("&cUnknown command")
 
