@@ -1112,6 +1112,13 @@ class RequestHandler(socketserver.StreamRequestHandler):
 class ThreadedServer(socketserver.ThreadingTCPServer):
     def __init__(self, address: tuple[str, int],
             request_handler: typing.Any, state: ServerState):
+        from ipaddress import ip_address, IPv6Address
+
+        if isinstance(ip_address(address[0]), IPv6Address):
+            self.address_family = socket.AF_INET6
+        else:
+            self.address_family = socket.AF_INET
+
         self.state: ServerState = state
         self.allow_reuse_address = True
         super().__init__(address, request_handler)
@@ -1124,7 +1131,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         state.load_config(sys.argv[1])
 
-    ip = state.config.get("listen_ip", ("127.0.0.1", 25565))
+    ip = state.config.get("listen_ip", ("::1", 25565))
 
     with ThreadedServer(ip, RequestHandler, state) as server:
         server_thread = threading.Thread(target=server.serve_forever)
