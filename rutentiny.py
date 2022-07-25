@@ -595,7 +595,7 @@ class Level:
                         if randrange(0, 64) == 0:
                             self.tree(x, height, z)
 
-            if z % 16 == 0:
+            if z % 32 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
@@ -629,7 +629,7 @@ class Level:
                 else:
                     self.set_block(x, height-1, z, BlockID.GRASS)
 
-            if z % 16 == 0:
+            if z % 32 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
@@ -673,7 +673,7 @@ class Level:
                         if randrange(0, 64) == 0:
                             self.tree(x, height, z)
 
-            if z % 16 == 0:
+            if z % 32 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
@@ -695,7 +695,7 @@ class Level:
                 else:
                     self.set_block(x, height-1, z, BlockID.GRASS)
 
-            if z % 16 == 0:
+            if z % 32 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
@@ -715,7 +715,7 @@ class Level:
                 for y in range(0, self.ys // 2):
                     self.set_block(x, y, z, block)
 
-            if z % 16 == 0:
+            if z % 32 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
@@ -884,24 +884,17 @@ class ServerState:
             unpack("xB", c.recv(2))
 
     def load_map(self, path: str) -> None:
-        for c in self.clients:
-            c.send(pack("BB", 12, 255))
-
         self.level = Level(self)
         self.level.load(path)
 
         for c in self.clients:
             self.level.send_to_client(c)
 
-        for c in self.clients:
             c.spawn(Vec3(self.level.xs//2, self.level.ys+2, self.level.zs//2),
                     Vec2(0, 0))
             self.add_client(c)
 
     def new_map(self, type: str, size: Vec3) -> None:
-        for c in self.clients:
-            c.send(pack("BB", 12, 255))
-
         self.level = Level(self, size)
 
         match type:
@@ -930,7 +923,6 @@ class ServerState:
         for c in self.clients:
             self.level.send_to_client(c)
 
-        for c in self.clients:
             c.spawn(Vec3(self.level.xs//2, self.level.ys+2, self.level.zs//2),
                     Vec2(0, 0))
             self.add_client(c)
@@ -1132,10 +1124,11 @@ class ThreadedServer(socketserver.ThreadingTCPServer):
             request_handler: typing.Any, state: ServerState):
         from ipaddress import ip_address, IPv6Address
 
-        if isinstance(ip_address(address[0]), IPv6Address):
-            self.address_family = socket.AF_INET6
+        if len(address[0]) > 0 \
+                    and not isinstance(ip_address(address[0]), IPv6Address):
+                self.address_family = socket.AF_INET
         else:
-            self.address_family = socket.AF_INET
+                self.address_family = socket.AF_INET6
 
         self.state: ServerState = state
         self.allow_reuse_address = True
