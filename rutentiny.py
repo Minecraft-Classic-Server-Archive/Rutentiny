@@ -59,10 +59,20 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] " + msg)
 
 
+def clamp(v: float, a: float, b: float) -> float:
+    return max(min(v, b), a)
+
+
 class Vec3(NamedTuple):
     x: int
     y: int
     z: int
+
+    def to_fixed(x: float, y: float, z: float) -> "Vec3":
+        return Vec3(
+                int(clamp(x * 32, -32768, 32767)),
+                int(clamp((y * 32) + 51, -32768, 32767)),
+                int(clamp(z * 32, -32768, 32767)))
 
 
 class Vec2(NamedTuple):
@@ -141,8 +151,8 @@ class BlockID(IntEnum):
     STONE_BRICKS = 65,
 
     # example blocks to replace still water and lava
-    UNUSED_FLUID = 9
-    TOXIC_SLIME = 11
+    TAR = 9
+    ACID = 11
 
     def cpe_fallback(block: "BlockID") -> "BlockID":
         match block:
@@ -162,6 +172,8 @@ class BlockID(IntEnum):
             case BlockID.PILLAR: return BlockID.CLOTH_WHITE
             case BlockID.CRATE: return BlockID.PLANKS
             case BlockID.STONE_BRICKS: return BlockID.STONE
+            case BlockID.ACID: return BlockID.LAVA_STILL
+            case BlockID.TAR: return BlockID.WATER_STILL
             case _: return block
 
 
@@ -246,7 +258,7 @@ class Client:
         body_block = self.server.level.get_block(x//32, (y-51)//32, z//32)
         feet_block = self.server.level.get_block(x//32, (y-52)//32, z//32)
 
-        if head_block == BlockID.WATER:
+        if head_block == BlockID.WATER or head_block == BlockID.TAR:
             if self.air < 0:
                 self.air = 21
 
@@ -262,8 +274,8 @@ class Client:
                 or body_block == BlockID.LAVA):
             if (self.ticks % 10) == 0:
                 self.health -= 4
-        elif (head_block == BlockID.TOXIC_SLIME
-                or body_block == BlockID.TOXIC_SLIME):
+        elif (head_block == BlockID.ACID
+                or body_block == BlockID.ACID):
             if (self.ticks % 10) == 0:
                 self.health -= 2
         elif (head_block == BlockID.FIRE
@@ -316,27 +328,40 @@ class Client:
                 self.spawn(Vec3(self.server.level.xs//2,
                     self.server.level.ys+1, self.server.level.zs//2),
                     Vec2(0, 0))
-                self.teleport(Vec3(self.server.level.xs//2,
-                    self.server.level.ys+1, self.server.level.zs//2),
-                    Vec2(0, 0))
                 self.server.add_client(self)
 
                 if ("BlockDefinitions", 1) in self.cpe_exts:
                     self.send(pack("BB64sBBBBBBBBBBBBBB",
-                        35,                     # DefineBlock packet
-                        BlockID.TOXIC_SLIME,    # block id
-                        b"Toxic Slime",         # name
-                        5,                      # collision mode
-                        96,                     # speed modifier
-                        46, 46, 46,             # top, side, bottom textures
-                        0,                      # translucent
-                        0,                      # walk noise
-                        1,                      # fullbright
-                        16,                     # voxel height
-                        3,                      # transparency mode
-                        191,                    # fog density
+                        35,             # DefineBlock packet
+                        BlockID.ACID,   # block id
+                        b"Acid",        # name
+                        5,              # collision mode
+                        96,             # speed modifier
+                        46, 46, 46,     # top, side, bottom textures
+                        0,              # translucent
+                        0,              # walk noise
+                        1,              # fullbright
+                        16,             # voxel height
+                        3,              # transparency mode
+                        191,            # fog density
                         # fog rgb
                         0x99, 0xe5, 0x50))
+
+                    self.send(pack("BB64sBBBBBBBBBBBBBB",
+                        35,             # DefineBlock packet
+                        BlockID.TAR,    # block id
+                        b"Tar",         # name
+                        6,              # collision mode
+                        15,             # speed modifier
+                        63, 63, 63,     # top, side, bottom textures
+                        0,              # translucent
+                        0,              # walk noise
+                        0,              # fullbright
+                        16,             # voxel height
+                        0,              # transparency mode
+                        255,            # fog density
+                        # fog rgb
+                        0x00, 0x00, 0x00))
 
             # block set
             case 5:
@@ -397,14 +422,16 @@ class Client:
                 return
 
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
+        fpos = Vec3.to_fixed(pos.x, pos.y, pos.z)
         self.send(pack("!BB64shhhBB", 7, 255, pad(self.name),
-            pos.x * 32, pos.y * 32 + 51, pos.z * 32, angle.x, angle.y))
+            fpos.x, fpos.y, fpos.z, angle.x, angle.y))
 
     def teleport(self, pos: Vec3, angle: Vec2) -> None:
         self.pos = pos
         self.angle = angle
+        fpos = Vec3.to_fixed(pos.x + .5, pos.y, pos.z + .5)
         self.send(pack("!BBhhhBB", 8, 255,
-            pos.x * 32 + 16, pos.y * 32 + 51, pos.z * 32 + 16,
+            fpos.x, fpos.y, fpos.z,
             angle.x, angle.y))
 
     def kick(self, reason: str) -> None:
