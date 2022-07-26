@@ -74,6 +74,13 @@ class Vec3(NamedTuple):
                 int(clamp((y * 32) + 51, -32768, 32767)),
                 int(clamp(z * 32, -32768, 32767)))
 
+    def dist_to(self, other: "Vec3") -> float:
+        from math import sqrt
+        return sqrt(
+            ((self.x - other.x) ** 2)
+            + ((self.y - other.y) ** 2)
+            + ((self.z - other.z) ** 2))
+
 
 class Vec2(NamedTuple):
     x: int
@@ -203,6 +210,7 @@ class Client:
         self.oper: bool = False
         self.disconnected: bool = False
         self.msg_buffer: bytearray = bytearray()
+        self.dmg_queue: list[int] = []
 
     def recv(self, size: int) -> bytes:
         try:
@@ -242,6 +250,7 @@ class Client:
             self.health = 20
             self.armor = -1
             self.air = -1
+            self.dmg_queue.clear()
             self.send(pack("Bbbbx", 0xa1, self.health, self.armor, self.air))
             self.teleport(
                     Vec3(self.server.level.xs//2,
@@ -257,13 +266,18 @@ class Client:
                 and ("VelocityControl", 1) in self.cpe_exts:
             self.send(pack("!BiiiBBB", 47, 0, 50000, 0, 0, 1, 0))
 
-        if self.gamemode != 0: return
+        if self.gamemode == 1 or self.gamemode == 2:
+            return
 
         old_health = self.health
         old_armor = self.armor
         old_air = self.air
         head_block = self.server.level.get_block(x//32, y//32, z//32)
         body_block = self.server.level.get_block(x//32, (y-51)//32, z//32)
+
+        for h in self.dmg_queue:
+            self.health -= h
+        self.dmg_queue.clear()
 
         if head_block == BlockID.WATER or head_block == BlockID.TAR:
             if self.air < 0:
@@ -397,7 +411,7 @@ class Client:
 
             # position update
             case 8:
-                x, y, z, pitch, yaw = unpack("!xhhhBB", self.recv(9))
+                x, y, z, yaw, pitch = unpack("!xhhhBB", self.recv(9))
                 self.old_pos = self.pos
                 self.old_angle = self.angle
                 self.pos = Vec3(x, y, z)
@@ -414,6 +428,33 @@ class Client:
                     msg = re.sub(r'%([0-9a-f])', r'&\1', msg)
                     self.msg_buffer = bytearray()
                     self.server.handle_message(self, msg)
+
+            # click
+            case 34:
+                from math import tau, sin, cos
+                data = unpack("!BBhhBhhhB", self.recv(14))
+
+                if data[4] > 127:
+                    return
+
+                try:
+                    target = self.server.clients[data[4]]
+                except:
+                    return
+
+                if self.gamemode == 4:
+                    if data[0] == 0 and data[1] == 0:
+                        target.dmg_queue.append(20)
+                elif self.gamemode == 0:
+                    dist = self.pos.dist_to(target.pos)
+                    yaw = ((self.angle.y / 255) * tau) + (tau / 4)
+                    punch = (int(cos(yaw) * -5000), int(sin(yaw) * -5000))
+                    if data[0] == 0 and data[1] == 0 and dist < 96:
+                        target.dmg_queue.append(1)
+
+                        if ("VelocityControl", 1) in target.cpe_exts:
+                            target.send(pack("!BiiiBBB", 47,
+                                punch[0], 5000, punch[1], 1, 1, 1))
 
             case _:
                 log(f"{self.name}: Unknown opcode {hex(op)}")
@@ -440,6 +481,10 @@ class Client:
                 self.send(pack("BBB", 0xa0, 1, 0))
                 self.gamemode = 2
 
+            case "instagib" | "4" | 4:
+                self.send(pack("BBB", 0xa0, 0, 0))
+                self.gamemode = 4
+
             case _:
                 self.message("&cValid gamemodes are: survival, explore, creative")
                 return
@@ -447,7 +492,7 @@ class Client:
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
         fpos = Vec3.to_fixed(pos.x, pos.y, pos.z)
         self.send(pack("!BB64shhhBB", 7, 255, pad(self.name),
-            fpos.x, fpos.y, fpos.z, angle.x, angle.y))
+            fpos.x, fpos.y, fpos.z, angle.y, angle.x))
 
     def teleport(self, pos: Vec3, angle: Vec2) -> None:
         self.pos = pos
@@ -455,7 +500,7 @@ class Client:
         fpos = Vec3.to_fixed(pos.x + .5, pos.y, pos.z + .5)
         self.send(pack("!BBhhhBB", 8, 255,
             fpos.x, fpos.y, fpos.z,
-            angle.x, angle.y))
+            angle.y, angle.x))
 
     def kick(self, reason: str) -> None:
         self.send(b"\x0e" + pad(reason))
@@ -955,11 +1000,11 @@ class ServerState:
             if c != cl:
                 c.send(pack("!BB64shhhBB", 7, self.clients.index(cl),
                     pad(cl.name), cl.pos.x, cl.pos.y, cl.pos.z,
-                    cl.angle.x, cl.angle.y))
+                    cl.angle.y, cl.angle.x))
 
                 cl.send(pack("!BB64shhhBB", 7, self.clients.index(c),
                     pad(c.name), c.pos.x, c.pos.y, c.pos.z,
-                    c.angle.x, c.angle.y))
+                    c.angle.y, c.angle.x))
 
     def remove_client(self, c: Client) -> None:
         if c not in self.clients:
@@ -999,7 +1044,7 @@ class ServerState:
             pad(self.config.get("motd", "My Cool Server")), oper))
 
     def cpe_handshake(self, c: Client) -> None:
-        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 8))
+        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 9))
         c.send(pack("!B64sI", 17, b"RutentoyGamemode", 1))
         c.send(pack("!B64sI", 17, b"CustomBlocks", 1))
         c.send(pack("!B64sI", 17, b"EnvMapAspect", 1))
@@ -1008,6 +1053,7 @@ class ServerState:
         c.send(pack("!B64sI", 17, b"LongerMessages", 1))
         c.send(pack("!B64sI", 17, b"MessageTypes", 1))
         c.send(pack("!B64sI", 17, b"FastMap", 1))
+        c.send(pack("!B64sI", 17, b"PlayerClick", 1))
         cname, extnum = unpack("!x64sH", c.recv(67))
 
         for i in range(0, extnum):
@@ -1081,7 +1127,7 @@ class ServerState:
         for cl in self.clients:
             if c == cl: continue
             cl.send(pack("!BBhhhBB", 8, i, c.pos.x, c.pos.y, c.pos.z,
-                c.angle.x, c.angle.y))
+                c.angle.y, c.angle.x))
 
     def set_playermodel(self, c: Client, model: str) -> None:
         i = self.clients.index(c)
