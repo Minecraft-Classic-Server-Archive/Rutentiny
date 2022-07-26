@@ -151,8 +151,9 @@ class BlockID(IntEnum):
     STONE_BRICKS = 65,
 
     # example blocks to replace still water and lava
-    TAR = 9
-    ACID = 11
+    TAR = 9,
+    ACID = 11,
+    JUMP_PAD = 66,
 
     def cpe_fallback(block: "BlockID") -> "BlockID":
         match block:
@@ -174,6 +175,7 @@ class BlockID(IntEnum):
             case BlockID.STONE_BRICKS: return BlockID.STONE
             case BlockID.ACID: return BlockID.LAVA_STILL
             case BlockID.TAR: return BlockID.WATER_STILL
+            case BlockID.JUMP_PAD: return BlockID.TNT
             case _: return block
 
 
@@ -248,15 +250,20 @@ class Client:
                     Vec2(0, 0))
             self.message("&cYou died!", 100)
 
+        x, y, z = self.pos
+        feet_block = self.server.level.get_block(x//32, (y-52)//32, z//32)
+
+        if feet_block == BlockID.JUMP_PAD \
+                and ("VelocityControl", 1) in self.cpe_exts:
+            self.send(pack("!BiiiBBB", 47, 0, 50000, 0, 0, 1, 0))
+
         if self.gamemode != 0: return
 
         old_health = self.health
         old_armor = self.armor
         old_air = self.air
-        x, y, z = self.pos
         head_block = self.server.level.get_block(x//32, y//32, z//32)
         body_block = self.server.level.get_block(x//32, (y-51)//32, z//32)
-        feet_block = self.server.level.get_block(x//32, (y-52)//32, z//32)
 
         if head_block == BlockID.WATER or head_block == BlockID.TAR:
             if self.air < 0:
@@ -360,6 +367,22 @@ class Client:
                         16,             # voxel height
                         0,              # transparency mode
                         255,            # fog density
+                        # fog rgb
+                        0x00, 0x00, 0x00))
+
+                    self.send(pack("BB64sBBBBBBBBBBBBBB",
+                        35,                 # DefineBlock packet
+                        BlockID.JUMP_PAD,   # block id
+                        b"Jump Pad",        # name
+                        2,                  # collision mode
+                        128,                # speed modifier
+                        10, 39, 55,         # top, side, bottom textures
+                        0,                  # translucent
+                        5,                  # walk noise
+                        0,                  # fullbright
+                        16,                 # voxel height
+                        0,                  # transparency mode
+                        0,                  # fog density
                         # fog rgb
                         0x00, 0x00, 0x00))
 
@@ -593,6 +616,23 @@ class Level:
         for y in range(0, height):
             self.set_block(rx, ry + y, rz, BlockID.LOG)
 
+    def boulder(self, rx: int, ry: int, rz: int) -> None:
+        from random import randrange, uniform
+        radius = randrange(4, 16)
+        xr = round(radius * uniform(0.8, 3.0))
+        yr = round(radius * uniform(0.8, 3.0))
+        zr = round(radius * uniform(0.8, 3.0))
+        xrs = xr**2
+        yrs = yr**2
+        zrs = zr**2
+        trs = xr*yr*zr
+
+        for x in range(-xr, xr):
+            for z in range(-zr, zr):
+                for y in range(-yr, yr):
+                    if (((x**2)*xrs) + ((y**2)*yrs) + ((z**2)*zrs)) <= trs:
+                        self.set_block(rx+x, ry+y, rz+z, BlockID.STONE)
+
     def generate_hills(self):
         from random import randrange
 
@@ -639,9 +679,15 @@ class Level:
                     self.set_block(x, height-1, z, BlockID.GRASS)
 
                 if height > self.ys//2 and height < self.ys-16:
-                    if self.noise(x/64, z/64) > 0.3:
+                    n = self.noise(x/64, z/64)
+
+                    if n > 0.3:
                         if randrange(0, 64) == 0:
                             self.tree(x, height, z)
+
+                    if n < -0.3:
+                        if randrange(0, 1024) == 0:
+                            self.boulder(x, height + randrange(-4, 0), z)
 
             if z % 32 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
@@ -720,6 +766,48 @@ class Level:
                     if self.noise(x/64, z/64) > 0.3:
                         if randrange(0, 64) == 0:
                             self.tree(x, height, z)
+
+            if z % 32 == 0:
+                log(f"{int((z / self.zs) * 100)}% generated")
+        log("Map generation done")
+        self.ready = True
+
+    def generate_moon(self):
+        from random import randrange
+        self.ready = False
+        log("Generating Moon map")
+        self.edge = ((BlockID.GRAVEL, BlockID.BEDROCK), (self.ys // 2, 0))
+        self.colors = [
+                (0x00, 0x00, 0x00), # sky
+                (0x00, 0x00, 0x00), # clouds
+                (0x00, 0x00, 0x00), # fog
+                (0x5f, 0x5f, 0x5f), # block ambient
+                (0xff, 0xff, 0xff), # block diffuse
+                (0xff, 0xff, 0xff), # skybox tint
+                ]
+
+        for z in range(0, self.zs):
+            for x in range(0, self.xs):
+                height = abs(self.noise(x / 96, z / 96) * 8)
+                height += self.noise(x / 24, z / 24) * 2
+                height -= max(16, self.noise(x/32, z/32) * 32)
+
+                spikes = self.noise(-x/256, -z/256)
+                height += max(0, (spikes - 0.5)) * 128
+
+                height = int(height + 18 + (self.ys//2))
+
+                if height < 0: height = 0
+                if height > self.ys: height = self.ys - (height - self.ys)
+
+                for y in range(0, height - 3):
+                    self.set_block(x, y, z, BlockID.STONE)
+                for y in range(height - 3, height - 1):
+                    self.set_block(x, y, z, BlockID.GRAVEL)
+
+                if height > self.ys//2:
+                    if randrange(0, 1024) == 0:
+                        self.boulder(x, height + randrange(-4, 0), z)
 
             if z % 32 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
@@ -957,6 +1045,9 @@ class ServerState:
 
             case "hell":
                 self.level.generate_hell()
+
+            case "moon":
+                self.level.generate_moon()
 
             case "flatgrass":
                 self.level.generate_flatgrass()
