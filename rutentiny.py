@@ -66,6 +66,9 @@ class Vec3(NamedTuple):
     y: int
     z: int
 
+    def __str__(self) -> str:
+        return f"{self.x, self.y, self.z}"
+
     def to_fixed(x: float, y: float, z: float) -> "Vec3":
         return Vec3(
                 int(clamp(x * 32, -32768, 32767)),
@@ -83,6 +86,9 @@ class Vec3(NamedTuple):
 class Vec2(NamedTuple):
     x: int
     y: int
+
+    def __str__(self) -> str:
+        return f"{self.x, self.y}"
 
 
 class BlockID(IntEnum):
@@ -250,12 +256,11 @@ class Client:
             self.air = -1
             self.dmg_queue.clear()
             self.send(pack("Bbbbx", 0xa1, self.health, self.armor, self.air))
-            self.teleport(
-                    Vec3(self.server.level.xs//2,
-                        self.server.level.ys+1,
-                        self.server.level.zs//2),
-                    Vec2(0, 0))
-            self.message("&cYou died!", 100)
+            spawn_pos = self.server.level.get_spawnpoint()
+            self.spawn(spawn_pos[0], spawn_pos[1])
+
+            if self.gamemode == 0:
+                self.message("&cYou died!", 100)
 
         x, y, z = self.pos
         feet_block = self.server.level.get_block(x//32, (y-52)//32, z//32)
@@ -344,11 +349,9 @@ class Client:
 
                 self.server.send_id(self)
                 self.server.level.send_to_client(self)
-                self.spawn(Vec3(
-                    self.server.level.xs//2,
-                    self.server.level.ys+1,
-                    self.server.level.zs//2),
-                    Vec2(0, 0))
+                spawnpos = self.server.level.get_spawnpoint()
+                self.spawn(spawnpos[0], spawnpos[1])
+                self.set_gamemode(self.server.level.gamemode)
                 self.server.add_client(self)
 
                 if ("BlockDefinitions", 1) in self.cpe_exts:
@@ -449,7 +452,8 @@ class Client:
 
                 if self.gamemode == 4:
                     if data[0] == 0 and data[1] == 0:
-                        target.dmg_queue.append(20)
+                        target.dmg_queue.append(200)
+                        self.server.message(f"&c{self.name} fragged {target.name}")
                 elif self.gamemode == 0:
                     dist = self.pos.dist_to(target.pos)
                     yaw = ((self.angle.y / 255) * tau) + (tau / 4)
@@ -473,6 +477,9 @@ class Client:
         self.send(pack("Bbbbx", 0xa1, self.health,
             self.armor, self.air))
 
+        speed = 1.0
+        hax = "-hax"
+
         match mode:
             case "survival" | "0" | 0:
                 self.send(pack("BBB", 0xa0, 0, 1))
@@ -481,6 +488,7 @@ class Client:
             case "creative" | "1" | 1:
                 self.send(pack("BBB", 0xa0, 1, 1))
                 self.gamemode = 1
+                hax = "+hax"
 
             case "explore" | "2" | 2:
                 self.send(pack("BBB", 0xa0, 1, 0))
@@ -489,15 +497,21 @@ class Client:
             case "instagib" | "4" | 4:
                 self.send(pack("BBB", 0xa0, 0, 0))
                 self.gamemode = 4
+                speed = 1.5
 
             case _:
-                self.message("&cValid gamemodes are: survival, explore, creative")
+                self.message("&cInvalid gamemode")
                 return
 
+        if ("InstantMOTD", 1) in self.cpe_exts:
+            self.send(pack("BB64s64sB", 0, 7,
+                pad(self.server.config.get("name", "Rutentiny")),
+                pad(f"{hax} horspeed={speed}"), 0))
+
+    # NOTE: expects a fixed-point Vec3, unlike teleport
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
-        fpos = Vec3.to_fixed(pos.x, pos.y, pos.z)
         self.send(pack("!BB64shhhBB", 7, 255, pad(self.name),
-            fpos.x, fpos.y, fpos.z, angle.y, angle.x))
+            pos.x, pos.y, pos.z, angle.y, angle.x))
 
     def teleport(self, pos: Vec3, angle: Vec2) -> None:
         self.pos = pos
@@ -542,6 +556,9 @@ class Level:
         else:
             self.xs, self.ys, self.zs = size
 
+        self.spawn_points = []
+        self.gamemode = "creative"
+
         self.map = bytearray(self.xs * self.ys * self.zs)
         self.edge = ((BlockID.WATER, BlockID.BEDROCK), (self.ys // 2, -2))
         self.clouds = (self.ys + 2, 256)
@@ -560,8 +577,11 @@ class Level:
     def save(self, path: str) -> None:
         log(f"saving map {path}")
         with gzip.open(path, "wb") as file:
-            file.write(b"rtm\0")
-            file.write(pack("!iiiq", self.xs, self.ys, self.zs, self.seed))
+            file.write(b"rtm\x01")
+            file.write(pack("!iii", self.xs, self.ys, self.zs))
+            file.write(self.map)
+
+            file.write(pack("!q", self.seed))
             file.write(pack("!BBii", self.edge[0][0], self.edge[0][1],
                 self.edge[1][0], self.edge[1][1]))
             file.write(pack("!ii", self.clouds[0], self.clouds[1]))
@@ -570,7 +590,12 @@ class Level:
                 file.write(pack("!BBB", self.colors[i][0], self.colors[i][1],
                     self.colors[i][2]))
 
-            file.write(self.map)
+            file.write(pack("!i", len(self.spawn_points)))
+            for point in self.spawn_points:
+                file.write(pack("!iiiBB", point[0].x, point[0].y, point[0].z,
+                    point[1].x, point[1].y))
+
+            file.write(pad(self.gamemode))
 
     def load(self, path: str) -> None:
         self.ready = False
@@ -578,24 +603,61 @@ class Level:
         with gzip.open(path, "rb") as file:
             magic = file.read(4)
 
-            if magic != b"rtm\0":
+            # old map format
+            if magic == b"rtm\x00":
+                self.xs, self.ys, self.zs, self.seed = unpack("!iiiq",
+                        file.read(calcsize("!iiiq")))
+                self.edge = (unpack("BB", file.read(2)),
+                        (unpack("!ii", file.read(calcsize("!ii")))))
+                self.clouds = unpack("!ii", file.read(calcsize("!ii")))
+
+                for i in range(0, 6):
+                    self.colors.append(unpack("!BBB", file.read(3)))
+
+                self.map = bytearray(file.read(self.xs * self.ys * self.zs))
+            elif magic == b"rtm\x01":
+                # put the size and map data before everything else so future
+                # extensions to the rtm1 format can be ignored for back compat
+                self.xs, self.ys, self.zs = unpack("!iii", file.read(12))
+                self.map = bytearray(file.read(self.xs * self.ys * self.zs))
+
+                self.seed = unpack("!q", file.read(8))
+                self.edge = (unpack("BB", file.read(2)),
+                        unpack("!ii", file.read(8)))
+                self.clouds = unpack("!ii", file.read(8))
+
+                self.colors.clear()
+                for i in range(0, 6):
+                    self.colors.append(unpack("!BBB", file.read(3)))
+
+                spawnpoint_count, = unpack("!i", file.read(4))
+
+                if spawnpoint_count > 0:
+                    self.spawn_points.clear()
+
+                    for i in range(0, spawnpoint_count):
+                        self.spawn_points.append((
+                            Vec3(*unpack("!iii", file.read(12))),
+                            Vec2(*unpack("BB", file.read(2)))))
+
+                self.gamemode = file.read(64).strip().decode("cp437")
+            else:
                 log(f"Invalid map format {repr(magic)}")
                 raise ValueError(f"Invalid map format {repr(magic)}")
 
-            self.xs, self.ys, self.zs, self.seed = unpack("!iiiq",
-                    file.read(calcsize("!iiiq")))
-            self.edge = (unpack("BB", file.read(2)),
-                    (unpack("!ii", file.read(calcsize("!ii")))))
-            self.clouds = unpack("!ii", file.read(calcsize("!ii")))
-
-            colors = []
-            for i in range(0, 6):
-                colors.append(unpack("!BBB", file.read(3)))
-            self.colors = tuple(colors)
-
-            self.map = bytearray(file.read(self.xs * self.ys * self.zs))
-
         self.ready = True
+
+    def get_spawnpoint(self) -> tuple[Vec3, Vec2]:
+        from random import choice
+
+        if len(self.spawn_points) < 1:
+            return (Vec3.to_fixed(
+                (self.xs//2),
+                (self.ys+1),
+                (self.zs//2)),
+                    Vec2(0, 0))
+        else:
+            return choice(self.spawn_points)
 
     def _index(self, x: int, y: int, z: int) -> int:
         return (y * self.zs + z) * self.xs + x
@@ -1077,8 +1139,9 @@ class ServerState:
         for c in self.clients:
             self.level.send_to_client(c)
 
-            c.spawn(Vec3(self.level.xs//2, self.level.ys+2, self.level.zs//2),
-                    Vec2(0, 0))
+            spawnpos = self.level.get_spawnpoint()
+            c.spawn(spawnpos[0], spawnpos[1])
+            c.set_gamemode(self.level.gamemode)
             self.add_client(c)
 
     def new_map(self, type: str, size: Vec3) -> None:
@@ -1113,8 +1176,9 @@ class ServerState:
         for c in self.clients:
             self.level.send_to_client(c)
 
-            c.spawn(Vec3(self.level.xs//2, self.level.ys+2, self.level.zs//2),
-                    Vec2(0, 0))
+            spawnpos = self.level.get_spawnpoint()
+            c.spawn(spawnpos[0], spawnpos[1])
+            c.set_gamemode(self.level.gamemode)
             self.add_client(c)
 
     def tick(self) -> None:
@@ -1214,7 +1278,7 @@ class ServerState:
 
             case "save":
                 if len(args) < 2 or len(args) > 2:
-                    warn("/load takes one argument")
+                    warn("/save takes one argument")
                     return
 
                 path = f"{args[1]}.rtm"
@@ -1235,7 +1299,7 @@ class ServerState:
 
         if msg.startswith("/me "):
             self.message(f"{c.name} {msg[4:]}")
-        elif msg.startswith("/gamemode "):
+        elif msg.startswith("/gamemode ") and c.oper:
             c.set_gamemode(msg[10:].strip())
             c.message(f"&eYour gamemode is set to {msg[10:].strip()}")
         elif msg.startswith("/load ") and c.oper:
@@ -1248,8 +1312,8 @@ class ServerState:
             try:
                 self.load_map(self.config.get("map_path", ".") + "/" + path)
                 self.message(f"Loaded {path}")
-            except:
-                c.message(f"&cFailed to load \"{path}\"")
+            except Exception as e:
+                c.message(f"&cFailed to load {path}: {e.__class__}")
         elif msg.startswith("/save ") and c.oper:
             path = msg[6:].strip() + ".rtm"
 
@@ -1260,8 +1324,8 @@ class ServerState:
             try:
                 self.level.save(self.config.get("map_path", ".") + "/" + path)
                 self.message(f"Saved as {path}")
-            except:
-                self.message(f"Failed to save {path}")
+            except Exception as e:
+                self.message(f"Failed to save {path}: {e.__class__}")
         elif msg.startswith("/new ") and c.oper:
             args = msg[5:].split(" ")
             if len(args) < 4:
@@ -1286,6 +1350,13 @@ class ServerState:
                 c.teleport(Vec3(x, y, z), c.angle)
             except:
                 c.message("&cUsage: /tp x y z")
+        elif msg.startswith("/add-spawn") and (c.gamemode == 1 or c.oper):
+            self.level.spawn_points.append((c.pos, c.angle))
+            c.message(f"Added new spawn point at {c.pos}, {c.angle}")
+        elif msg.startswith("/level-gamemode ") and c.oper:
+            mode = msg[13:].strip()
+            self.level.gamemode = mode
+            c.message(f"Default gamemode set to {mode}")
         elif msg.startswith("/tree") and c.gamemode == 1:
             self.level.tree(c.pos.x//32, c.pos.y//32-1, c.pos.z//32)
         elif msg.startswith("/model "):
