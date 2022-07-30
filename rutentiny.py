@@ -344,8 +344,10 @@ class Client:
 
                 self.server.send_id(self)
                 self.server.level.send_to_client(self)
-                self.spawn(Vec3(self.server.level.xs//2,
-                    self.server.level.ys+1, self.server.level.zs//2),
+                self.spawn(Vec3(
+                    self.server.level.xs//2,
+                    self.server.level.ys+1,
+                    self.server.level.zs//2),
                     Vec2(0, 0))
                 self.server.add_client(self)
 
@@ -402,10 +404,15 @@ class Client:
             case 5:
                 x, y, z, mode, block = unpack("!hhhBB", self.recv(8))
 
-                if mode == 0:
-                    self.server.set_block(self, Vec3(x, y, z), BlockID.NONE)
+                # only survival and creative allow block placing
+                if self.gamemode != 0 and self.gamemode != 1:
+                    self.send(pack("!BhhhB", 6, x, y, z,
+                        self.server.level.get_block(x, y, z)))
                 else:
-                    self.server.set_block(self, Vec3(x, y, z), block)
+                    if mode == 0:
+                        self.server.set_block(self, Vec3(x, y, z), BlockID.NONE)
+                    else:
+                        self.server.set_block(self, Vec3(x, y, z), block)
 
             # position update
             case 8:
