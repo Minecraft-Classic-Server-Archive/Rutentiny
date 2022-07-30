@@ -504,9 +504,13 @@ class Client:
                 return
 
         if ("InstantMOTD", 1) in self.cpe_exts:
+            oper = 0
+            if self.oper:
+                oper = 100
+
             self.send(pack("BB64s64sB", 0, 7,
                 pad(self.server.config.get("name", "Rutentiny")),
-                pad(f"{hax} horspeed={speed}"), 0))
+                pad(f"{hax} horspeed={speed}"), oper))
 
     # NOTE: expects a fixed-point Vec3, unlike teleport
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
@@ -581,7 +585,11 @@ class Level:
             file.write(pack("!iii", self.xs, self.ys, self.zs))
             file.write(self.map)
 
-            file.write(pack("!q", self.seed))
+            # FIXME: sometimes this just breaks and corrupts the save
+            try:
+                file.write(pack("!q", self.seed))
+            except:
+                file.write(pack("!q", 0))
             file.write(pack("!BBii", self.edge[0][0], self.edge[0][1],
                 self.edge[1][0], self.edge[1][1]))
             file.write(pack("!ii", self.clouds[0], self.clouds[1]))
@@ -621,7 +629,10 @@ class Level:
                 self.xs, self.ys, self.zs = unpack("!iii", file.read(12))
                 self.map = bytearray(file.read(self.xs * self.ys * self.zs))
 
-                self.seed = unpack("!q", file.read(8))
+                try:
+                    self.seed = unpack("!q", file.read(8))
+                except:
+                    self.seed = 0
                 self.edge = (unpack("BB", file.read(2)),
                         unpack("!ii", file.read(8)))
                 self.clouds = unpack("!ii", file.read(8))
@@ -1313,7 +1324,7 @@ class ServerState:
                 self.load_map(self.config.get("map_path", ".") + "/" + path)
                 self.message(f"Loaded {path}")
             except Exception as e:
-                c.message(f"&cFailed to load {path}: {e.__class__}")
+                c.message(f"&cFailed to load {path}: {e!r}")
         elif msg.startswith("/save ") and c.oper:
             path = msg[6:].strip() + ".rtm"
 
@@ -1325,7 +1336,7 @@ class ServerState:
                 self.level.save(self.config.get("map_path", ".") + "/" + path)
                 self.message(f"Saved as {path}")
             except Exception as e:
-                self.message(f"Failed to save {path}: {e.__class__}")
+                self.message(f"Failed to save {path}: {e!r}")
         elif msg.startswith("/new ") and c.oper:
             args = msg[5:].split(" ")
             if len(args) < 4:
@@ -1354,7 +1365,7 @@ class ServerState:
             self.level.spawn_points.append((c.pos, c.angle))
             c.message(f"Added new spawn point at {c.pos}, {c.angle}")
         elif msg.startswith("/level-gamemode ") and c.oper:
-            mode = msg[13:].strip()
+            mode = msg[15:].strip()
             self.level.gamemode = mode
             c.message(f"Default gamemode set to {mode}")
         elif msg.startswith("/tree") and c.gamemode == 1:
