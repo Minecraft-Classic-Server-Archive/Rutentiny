@@ -255,7 +255,7 @@ class Client:
             self.armor = -1
             self.air = -1
             self.dmg_queue.clear()
-            self.send(pack("Bbbbx", 0xa1, self.health, self.armor, self.air))
+            self.health_update()
             spawn_pos = self.server.level.get_spawnpoint()
             self.spawn(spawn_pos[0], spawn_pos[1])
 
@@ -312,7 +312,7 @@ class Client:
         if old_health != self.health \
                 or old_air != self.air \
                 or old_armor != self.armor:
-            self.send(pack("Bbbbx", 0xa1, self.health, self.armor, self.air))
+            self.health_update()
 
     def packet(self):
         try:
@@ -468,40 +468,62 @@ class Client:
             case _:
                 log(f"{self.name}: Unknown opcode {hex(op)}")
 
+    def health_update(self) -> None:
+        if ("RutentoyGamemode", 1) in self.cpe_exts:
+            self.send(pack("Bbbbx", 0xa1, self.health,
+                self.armor, self.air))
+        elif ("MessageTypes", 1) in self.cpe_exts:
+            if self.gamemode != 1:
+                self.message(f"&cHealth: {self.health}", 1)
+            else:
+                self.message(" ", 1)
+
+            if self.armor > -1:
+                self.message(f"&7Armor: {self.armor}", 2)
+            else:
+                self.message(" ", 2)
+
+            if self.air > -1 and self.air < 21:
+                self.message(f"&bAir: {self.air}", 3)
+            else:
+                self.message(" ", 3)
+
     def set_gamemode(self, mode: str | int) -> None:
-        if ("RutentoyGamemode", 1) not in self.cpe_exts:
-            self.message("&cYour client doesn't support RutentoyGamemode.")
-            return
+        ruten = ("RutentoyGamemode", 1) in self.cpe_exts
 
         self.health = 20
-        self.send(pack("Bbbbx", 0xa1, self.health,
-            self.armor, self.air))
 
         speed = 1.0
         hax = "-hax"
 
         match mode:
             case "survival" | "0" | 0:
-                self.send(pack("BBB", 0xa0, 0, 1))
+                if ruten:
+                    self.send(pack("BBB", 0xa0, 0, 1))
                 self.gamemode = 0
 
             case "creative" | "1" | 1:
-                self.send(pack("BBB", 0xa0, 1, 1))
+                if ruten:
+                    self.send(pack("BBB", 0xa0, 1, 1))
                 self.gamemode = 1
                 hax = "+hax"
 
             case "explore" | "2" | 2:
-                self.send(pack("BBB", 0xa0, 1, 0))
+                if ruten:
+                    self.send(pack("BBB", 0xa0, 1, 0))
                 self.gamemode = 2
 
             case "instagib" | "4" | 4:
-                self.send(pack("BBB", 0xa0, 0, 0))
+                if ruten:
+                    self.send(pack("BBB", 0xa0, 0, 0))
                 self.gamemode = 4
                 speed = 1.5
 
             case _:
                 self.message("&cInvalid gamemode")
                 return
+
+        self.health_update()
 
         if ("InstantMOTD", 1) in self.cpe_exts:
             oper = 0
