@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # rutentiny - Ada <sarahsooup@protonmail.com> CC0-1.0
 # vim: et:ts=4:sw=4
+import sys
 
-try:
-    match None:
-        case _: pass
-except:
+if sys.version_info < (3, 10):
     print("Rutentiny requires Python 3.10 or later")
     exit(1)
 
@@ -1315,8 +1313,6 @@ class ThreadedServer(socketserver.ThreadingTCPServer):
 
 
 if __name__ == "__main__":
-    import sys
-
     state = ServerState()
     if len(sys.argv) > 1:
         state.load_config(sys.argv[1])
