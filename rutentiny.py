@@ -335,12 +335,21 @@ class Client:
                     self.key = key.strip().decode("ascii")
                 except:
                     log(f"client sent bad login packet")
-                    self.kick("Invalid login packet")
+                    self.kick("Corrupted login packet")
                     return
 
-                if (skey := self.server.config.get("key")):
-                    if skey != self.key:
-                        self.kick("Invalid password or key")
+                if len(self.server.clients) >= self.server.max_clients:
+                    self.kick("Server is full")
+                    return
+
+                if self.server.key:
+                    if self.server.key != self.key:
+                        self.kick("Invalid passkey")
+                        return
+                elif self.server.config.get("heartbeat_url", None):
+                    from hashlib import md5
+                    if key != md5(self.server.key.encode() + name):
+                        self.kick("Invalid login key")
                         return
 
                 if pad == 0x42:
@@ -1063,6 +1072,8 @@ class ServerState:
         self.clients: list[Client] = []
         self.config: dict = {}
         self.alive: bool = True
+        self.key: str = ""
+        self.max_clients: int = 8
 
     def load_config(self, path: str) -> None:
         from ast import literal_eval
@@ -1090,6 +1101,16 @@ class ServerState:
                     self.config[key] = literal_eval(value)
                 except:
                     log(f"config error on line {lineno}")
+
+        self.max_clients = self.config.get("max_clients", 8)
+
+        if key := self.config.get("key", ""):
+            self.key = key
+        elif self.config.get("heartbeat_url", None):
+            from secrets import choice
+            base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            for i in range(0, 16):
+                self.key += choice(base62)
 
     def add_client(self, c: Client) -> None:
         if c not in self.clients:
@@ -1423,12 +1444,47 @@ class ThreadedServer(socketserver.ThreadingTCPServer):
         super().__init__(address, request_handler)
 
 
+class HeartBeater:
+    def __init__(self, state: ServerState):
+        self.state = state
+
+    def start_beating(self):
+        import urllib.parse as parse
+        import urllib.request as request
+        from time import sleep
+        cfg = self.state.config.get
+
+        url = cfg("heartbeat_url") + "?"
+        url += f"port={cfg('listen_ip', (0, 25565))[1]}&"
+        url += f"max={cfg('max_clients', 8)}&"
+        url += f"name={parse.quote(cfg('name', 'Rutentoy'))}&"
+        url += f"public=False&"
+        url += f"version=7&"
+        url += f"salt={parse.quote(self.state.key)}&"
+        url += f"users={len(self.state.clients)}"
+
+        while True:
+            try:
+                req = request.urlopen(url)
+                req.close()
+            except:
+                break
+
+            sleep(1)
+
+
 if __name__ == "__main__":
     state = ServerState()
     if len(sys.argv) > 1:
         state.load_config(sys.argv[1])
 
     ip = state.config.get("listen_ip", ("::1", 25565))
+
+    if state.config.get("heartbeat_url", "").startswith("http"):
+        heart = HeartBeater(state)
+        heart_thread = threading.Thread(target=heart.start_beating)
+        heart_thread.daemon = True
+        heart_thread.start()
 
     with ThreadedServer(ip, RequestHandler, state) as server:
         server_thread = threading.Thread(target=server.serve_forever)
