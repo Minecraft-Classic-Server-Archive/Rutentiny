@@ -1089,7 +1089,7 @@ class Level:
             c.send(pack("!BBBBBBBBBBBBiHiiiiBB",
                 48,                 # DefineEffect
                 1,                  # EffectID
-                0, 0, 7, 7,         # UV
+                0, 0, 15, 15,       # UV
                 0xFF, 0xFF, 0xFF,   # Color
                 8,                  # FrameCount
                 16,                 # ParticleCount
