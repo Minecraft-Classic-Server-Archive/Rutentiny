@@ -69,6 +69,12 @@ class Vec3(NamedTuple):
     def __str__(self) -> str:
         return f"{self.x, self.y, self.z}"
 
+    def __add__(self, other: "Vec3") -> "Vec3":
+        return Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
+
+    def __sub__(self, other: "Vec3") -> "Vec3":
+        return Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
+
     def to_fixed(x: float, y: float, z: float) -> "Vec3":
         return Vec3(
                 int(clamp(x * 32, -32768, 32767)),
@@ -215,6 +221,7 @@ class Client:
         self.disconnected: bool = False
         self.msg_buffer: bytearray = bytearray()
         self.dmg_queue: list[int] = []
+        self.held_block: int = 0
 
     def recv(self, size: int) -> bytes:
         try:
@@ -251,6 +258,9 @@ class Client:
             self.send(pack("B", 1))
 
         if self.health < 1:
+            self.server.spawn_effect(1, self.pos - Vec3(0, 24, 0),
+                    Vec3(0,0,0))
+
             self.health = 20
             self.armor = -1
             self.air = -1
@@ -428,11 +438,19 @@ class Client:
 
             # position update
             case 8:
-                x, y, z, yaw, pitch = unpack("!xhhhBB", self.recv(9))
+                block, x, y, z, yaw, pitch = unpack("!BhhhBB", self.recv(9))
                 self.old_pos = self.pos
                 self.old_angle = self.angle
                 self.pos = Vec3(x, y, z)
                 self.angle = Vec2(pitch, yaw)
+
+                if block != self.held_block:
+                    if block != BlockID.NONE:
+                        self.server.set_playermodel(self, "hold", 1000 + block)
+                    else:
+                        self.server.set_playermodel(self, "humanoid", 1000)
+
+                self.held_block = block
 
             # message
             case 13:
@@ -459,6 +477,8 @@ class Client:
                 except:
                     return
 
+                # FIXME: classicube doesnt check for line-of-sight so we
+                # will have to do it instead at some point
                 if self.gamemode == 4:
                     if data[0] == 0 and data[1] == 0:
                         target.dmg_queue.append(200)
@@ -526,7 +546,7 @@ class Client:
                 if ruten:
                     self.send(pack("BBB", 0xa0, 0, 0))
                 self.gamemode = 4
-                speed = 1.5
+                speed = 2.0
 
             case _:
                 self.message("&cInvalid gamemode")
@@ -599,7 +619,7 @@ class Level:
         self.clouds = (self.ys + 2, 256)
         self.colors = [
                 (0x63, 0x9b, 0xff),	# sky
-                (0xcb, 0xdb, 0xfc), # clouds
+                (0xff, 0xff, 0xff), # clouds
                 (0xcb, 0xdb, 0xfc), # fog
                 (0x84, 0x7e, 0x87), # block ambient
                 (0xff, 0xff, 0xff), # block diffuse
@@ -1065,6 +1085,25 @@ class Level:
             c.send(pack("BBBB", 28, 10, 1, 1))
             c.send(pack("BBBB", 28, 11, 1, 1))
 
+        if ("CustomParticles", 1) in c.cpe_exts:
+            c.send(pack("!BBBBBBBBBBBBiHiiiiBB",
+                48,                 # DefineEffect
+                1,                  # EffectID
+                0, 0, 7, 7,         # UV
+                0xFF, 0xFF, 0xFF,   # Color
+                8,                  # FrameCount
+                16,                 # ParticleCount
+                24,                 # Size (/32)
+                5000,               # SizeVariation
+                32,                 # Spread
+                1000,               # Speed (/10k)
+                -10000,             # Gravity (/10k)
+                5000,               # Lifetime (/10k)
+                5000,               # LifetimeVariation (/10k)
+                0b01110000,         # CollisionFlags
+                1                   # FullBright
+                ))
+
 
 class ServerState:
     def __init__(self):
@@ -1165,7 +1204,7 @@ class ServerState:
             pad(self.config.get("motd", "My Cool Server")), oper))
 
     def cpe_handshake(self, c: Client) -> None:
-        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 9))
+        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 11))
         c.send(pack("!B64sI", 17, b"RutentoyGamemode", 1))
         c.send(pack("!B64sI", 17, b"CustomBlocks", 1))
         c.send(pack("!B64sI", 17, b"EnvMapAspect", 1))
@@ -1175,6 +1214,8 @@ class ServerState:
         c.send(pack("!B64sI", 17, b"MessageTypes", 1))
         c.send(pack("!B64sI", 17, b"FastMap", 1))
         c.send(pack("!B64sI", 17, b"PlayerClick", 1))
+        c.send(pack("!B64sI", 17, b"HeldBlock", 1))
+        c.send(pack("!B64sI", 17, b"CustomParticles", 1))
         cname, extnum = unpack("!x64sH", c.recv(67))
 
         for i in range(0, extnum):
@@ -1252,7 +1293,7 @@ class ServerState:
             cl.send(pack("!BBhhhBB", 8, i, c.pos.x, c.pos.y, c.pos.z,
                 c.angle.y, c.angle.x))
 
-    def set_playermodel(self, c: Client, model: str) -> None:
+    def set_playermodel(self, c: Client, model: str, scale: int = 1000) -> None:
         i = self.clients.index(c)
         models = pad(model)
 
@@ -1260,10 +1301,31 @@ class ServerState:
             if ("ChangeModel", 1) not in c.cpe_exts:
                 continue
 
+            # ChangeModel
             if c == cl:
                 cl.send(pack("!Bb64s", 29, -1, models))
             else:
                 cl.send(pack("!Bb64s", 29, i, models))
+
+            if ("EntityProperty", 1) not in c.cpe_exts:
+                continue
+
+            # SetEntityProperty
+            # NOTE: CC supports property 3, 4, and 5 all for setting
+            # the model scale; wiki.vg doesn't document this
+            if c == cl:
+                cl.send(pack("!BbBi", 42, -1, 3, scale))
+            else:
+                cl.send(pack("!BbBi", 42, i, 3, scale))
+
+    def spawn_effect(self, id: int, pos: Vec3, vel: Vec3) -> None:
+        for cl in self.clients:
+            if ("CustomParticles", 1) not in cl.cpe_exts:
+                continue
+
+            # SpawnEffect
+            cl.send(pack("!BBiiiiii", 49, id, pos.x, pos.y, pos.z,
+                vel.x, vel.y, vel.z))
 
     def set_block(self, c: Client, pos: Vec3, block: BlockID) -> None:
         self.level._set_block(pos.x, pos.y, pos.z, block)
