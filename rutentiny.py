@@ -222,6 +222,7 @@ class Client:
         self.msg_buffer: bytearray = bytearray()
         self.dmg_queue: list[int] = []
         self.held_block: int = 0
+        self.model: str = "humanoid"
 
     def recv(self, size: int) -> bytes:
         try:
@@ -258,8 +259,9 @@ class Client:
             self.send(pack("B", 1))
 
         if self.health < 1:
-            self.server.spawn_effect(1, self.pos - Vec3(0, 24, 0),
-                    Vec3(0,0,0))
+            self.server.spawn_effect(1,
+                    self.pos - Vec3(0, 24, 0),
+                    Vec3(0, 0, 0))
 
             self.health = 20
             self.armor = -1
@@ -373,54 +375,6 @@ class Client:
                 self.set_gamemode(self.server.level.gamemode)
                 self.server.add_client(self)
 
-                if ("BlockDefinitions", 1) in self.cpe_exts:
-                    self.send(pack("BB64sBBBBBBBBBBBBBB",
-                        35,             # DefineBlock packet
-                        BlockID.ACID,   # block id
-                        b"Acid",        # name
-                        5,              # collision mode
-                        96,             # speed modifier
-                        46, 46, 46,     # top, side, bottom textures
-                        0,              # translucent
-                        0,              # walk noise
-                        1,              # fullbright
-                        16,             # voxel height
-                        3,              # transparency mode
-                        191,            # fog density
-                        # fog rgb
-                        0x99, 0xe5, 0x50))
-
-                    self.send(pack("BB64sBBBBBBBBBBBBBB",
-                        35,             # DefineBlock packet
-                        BlockID.TAR,    # block id
-                        b"Tar",         # name
-                        6,              # collision mode
-                        15,             # speed modifier
-                        63, 63, 63,     # top, side, bottom textures
-                        0,              # translucent
-                        0,              # walk noise
-                        0,              # fullbright
-                        16,             # voxel height
-                        0,              # transparency mode
-                        255,            # fog density
-                        # fog rgb
-                        0x00, 0x00, 0x00))
-
-                    self.send(pack("BB64sBBBBBBBBBBBBBB",
-                        35,                 # DefineBlock packet
-                        BlockID.JUMP_PAD,   # block id
-                        b"Jump Pad",        # name
-                        2,                  # collision mode
-                        128,                # speed modifier
-                        10, 39, 55,         # top, side, bottom textures
-                        0,                  # translucent
-                        5,                  # walk noise
-                        0,                  # fullbright
-                        16,                 # voxel height
-                        0,                  # transparency mode
-                        0,                  # fog density
-                        # fog rgb
-                        0x00, 0x00, 0x00))
 
             # block set
             case 5:
@@ -438,17 +392,34 @@ class Client:
 
             # position update
             case 8:
+                old_feet = self.server.level.get_block(
+                        self.pos.x // 32,
+                        (self.pos.y - 52) // 32,
+                        self.pos.z // 32)
+                old_pos = self.pos
+
                 block, x, y, z, yaw, pitch = unpack("!BhhhBB", self.recv(9))
                 self.old_pos = self.pos
                 self.old_angle = self.angle
                 self.pos = Vec3(x, y, z)
                 self.angle = Vec2(pitch, yaw)
 
-                if block != self.held_block:
+                if block != self.held_block \
+                        and (self.model == "hold" or self.model == "humanoid"):
                     if block != BlockID.NONE:
                         self.server.set_playermodel(self, "hold", 1000 + block)
                     else:
                         self.server.set_playermodel(self, "humanoid", 1000)
+
+                new_feet = self.server.level.get_block(
+                        self.pos.x // 32,
+                        (self.pos.y - 52) // 32,
+                        self.pos.z // 32)
+
+                if old_feet != BlockID.WATER and new_feet == BlockID.WATER:
+                    self.server.spawn_effect(2,
+                            self.pos - Vec3(0, 51, 0),
+                            Vec3(0, 100, 0))
 
                 self.held_block = block
 
@@ -476,6 +447,8 @@ class Client:
                     target = self.server.clients[data[4]]
                 except:
                     return
+
+                block = Vec3(data[5], data[6], data[7])
 
                 # FIXME: classicube doesnt check for line-of-sight so we
                 # will have to do it instead at some point
@@ -1050,6 +1023,56 @@ class Level:
         else:
             c.send(pack("B", 2))
 
+
+        if ("BlockDefinitions", 1) in c.cpe_exts:
+            c.send(pack("BB64sBBBBBBBBBBBBBB",
+                35,             # DefineBlock packet
+                BlockID.ACID,   # block id
+                b"Acid",        # name
+                5,              # collision mode
+                96,             # speed modifier
+                46, 46, 46,     # top, side, bottom textures
+                0,              # translucent
+                0,              # walk noise
+                1,              # fullbright
+                16,             # voxel height
+                3,              # transparency mode
+                191,            # fog density
+                # fog rgb
+                0x99, 0xe5, 0x50))
+
+            c.send(pack("BB64sBBBBBBBBBBBBBB",
+                35,             # DefineBlock packet
+                BlockID.TAR,    # block id
+                b"Tar",         # name
+                6,              # collision mode
+                15,             # speed modifier
+                63, 63, 63,     # top, side, bottom textures
+                0,              # translucent
+                0,              # walk noise
+                0,              # fullbright
+                16,             # voxel height
+                0,              # transparency mode
+                255,            # fog density
+                # fog rgb
+                0x00, 0x00, 0x00))
+
+            c.send(pack("BB64sBBBBBBBBBBBBBB",
+                35,                 # DefineBlock packet
+                BlockID.JUMP_PAD,   # block id
+                b"Jump Pad",        # name
+                2,                  # collision mode
+                128,                # speed modifier
+                10, 39, 55,         # top, side, bottom textures
+                0,                  # translucent
+                5,                  # walk noise
+                0,                  # fullbright
+                16,                 # voxel height
+                0,                  # transparency mode
+                0,                  # fog density
+                # fog rgb
+                0x00, 0x00, 0x00))
+
         if ("EnvMapAspect", 1) in c.cpe_exts:
             # edge blocks
             c.send(pack("!BBi", 41, 0, self.edge[0][1]))
@@ -1086,6 +1109,7 @@ class Level:
             c.send(pack("BBBB", 28, 11, 1, 1))
 
         if ("CustomParticles", 1) in c.cpe_exts:
+            # cloud puff particle
             c.send(pack("!BBBBBBBBBBBBiHiiiiBB",
                 48,                 # DefineEffect
                 1,                  # EffectID
@@ -1097,11 +1121,30 @@ class Level:
                 5000,               # SizeVariation
                 32,                 # Spread
                 1000,               # Speed (/10k)
-                -10000,             # Gravity (/10k)
+                -1000,              # Gravity (/10k)
                 5000,               # Lifetime (/10k)
                 5000,               # LifetimeVariation (/10k)
                 0b01110000,         # CollisionFlags
-                1                   # FullBright
+                0                   # FullBright
+                ))
+
+            # water splash particle
+            c.send(pack("!BBBBBBBBBBBBiHiiiiBB",
+                48,                 # DefineEffect
+                2,                  # EffectID
+                0, 16, 15, 31,      # UV
+                0xFF, 0xFF, 0xFF,   # Color
+                2,                  # FrameCount
+                6,                  # ParticleCount
+                8,                  # Size (/32)
+                5000,               # SizeVariation
+                20,                 # Spread (/32)
+                12000,              # Speed (/10k)
+                60000,              # Gravity (/10k)
+                5000,               # Lifetime (/10k)
+                5000,               # LifetimeVariation (/10k)
+                0b01110000,         # CollisionFlags
+                0                   # FullBright
                 ))
 
 
@@ -1297,6 +1340,8 @@ class ServerState:
         i = self.clients.index(c)
         models = pad(model)
 
+        c.model = model
+
         for cl in self.clients:
             if ("ChangeModel", 1) not in c.cpe_exts:
                 continue
@@ -1324,8 +1369,10 @@ class ServerState:
                 continue
 
             # SpawnEffect
-            cl.send(pack("!BBiiiiii", 49, id, pos.x, pos.y, pos.z,
-                vel.x, vel.y, vel.z))
+            cl.send(pack("!BBiiiiii", 49, id,
+                pos.x, pos.y, pos.z,
+                # NOTE: these are a world-space target, not a velocity
+                pos.x - vel.x, pos.y - vel.y, pos.z - vel.z))
 
     def set_block(self, c: Client, pos: Vec3, block: BlockID) -> None:
         self.level._set_block(pos.x, pos.y, pos.z, block)
