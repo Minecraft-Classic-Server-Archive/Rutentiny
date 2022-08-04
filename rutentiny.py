@@ -375,7 +375,6 @@ class Client:
                 self.set_gamemode(self.server.level.gamemode)
                 self.server.add_client(self)
 
-
             # block set
             case 5:
                 x, y, z, mode, block = unpack("!hhhBB", self.recv(8))
@@ -555,6 +554,18 @@ class Client:
         self.disconnected = True
 
     def message(self, msg: str, type: int = 0) -> None:
+        # NOTE: wiki.vg doesn't document all of CC's capabilities,
+        # maybe 'big announcement' and 'small announcement' aren't standard CPE
+        # 0: normal chat
+        # 1: top-right 1
+        # 2: top-right 2
+        # 3: top-right 3
+        # 11: bottom-right 1
+        # 12: bottom-right 2
+        # 13: bottom-right 3
+        # 100: announcement
+        # 101: big announcement
+        # 102: announcement subtitle
         if ("MessageTypes", 1) not in self.cpe_exts:
             type = 0
 
