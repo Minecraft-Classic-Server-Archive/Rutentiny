@@ -1473,7 +1473,8 @@ class ServerState:
 
         if msg.startswith("/me "):
             self.message(f"{c.name} {msg[4:]}")
-        elif msg.startswith("/gamemode ") and c.oper:
+        elif msg.startswith("/gamemode ") \
+                and (c.oper or self.level.gamemode == "creative"):
             c.set_gamemode(msg[10:].strip())
             c.message(f"&eYour gamemode is set to {msg[10:].strip()}")
         elif msg.startswith("/load ") and c.oper:
