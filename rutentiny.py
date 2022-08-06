@@ -385,9 +385,9 @@ class Client:
                         self.server.level.get_block(x, y, z)))
                 else:
                     if mode == 0:
-                        self.server.set_block(self, Vec3(x, y, z), BlockID.NONE)
+                        self.server.set_block(Vec3(x, y, z), BlockID.NONE)
                     else:
-                        self.server.set_block(self, Vec3(x, y, z), block)
+                        self.server.set_block(Vec3(x, y, z), block)
 
             # position update
             case 8:
@@ -1330,6 +1330,24 @@ class ServerState:
             c.set_gamemode(self.level.gamemode)
             self.add_client(c)
 
+    def update_env_properties(self):
+        for c in self.clients:
+            if ("EnvMapAspect", 1) in c.cpe_exts:
+                # edge blocks
+                c.send(pack("!BBi", 41, 0, self.level.edge[0][1]))
+                c.send(pack("!BBi", 41, 9, self.level.edge[1][1]))
+                c.send(pack("!BBi", 41, 1, self.level.edge[0][0]))
+                c.send(pack("!BBi", 41, 2, self.level.edge[1][0]))
+
+                # clouds
+                c.send(pack("!BBi", 41, 3, self.level.clouds[0]))
+                c.send(pack("!BBi", 41, 5, self.level.clouds[1]))
+
+            if ("EnvColors", 1) in c.cpe_exts:
+                for i in range(0, 5):
+                    col = self.level.colors[i]
+                    c.send(pack("!BBhhh", 25, i, col[0], col[1], col[2]))
+
     def tick(self) -> None:
         for c in self.clients:
             if c.pos != c.old_pos or c.angle != c.old_angle:
@@ -1385,11 +1403,11 @@ class ServerState:
                 # NOTE: these are a world-space target, not a velocity
                 pos.x - vel.x, pos.y - vel.y, pos.z - vel.z))
 
-    def set_block(self, c: Client, pos: Vec3, block: BlockID) -> None:
+    def set_block(self, pos: Vec3, block: BlockID) -> None:
         self.level._set_block(pos.x, pos.y, pos.z, block)
 
-        for cl in self.clients:
-            cl.send(pack("!BhhhB", 6, pos.x, pos.y, pos.z, block))
+        for c in self.clients:
+            c.send(pack("!BhhhB", 6, pos.x, pos.y, pos.z, block))
 
     def message(self, msg: str, type: int = 0) -> None:
         log(msg)
@@ -1536,8 +1554,124 @@ class ServerState:
             self.level.tree(c.pos.x//32, c.pos.y//32-1, c.pos.z//32)
         elif msg.startswith("/model "):
             self.set_playermodel(c, msg[7:])
+        elif msg.startswith("/map-property ") and c.oper:
+            args = msg[14:].split()
+
+            if len(args) < 1:
+                c.message("&cAvailable properties:")
+                c.message("&c  clouds")
+                return
+
+            match args[0]:
+                case "clouds":
+                    try:
+                        h = int(args[1])
+                        s = int(float(args[2]) * 256)
+                    except:
+                        c.message(f"&cRequired arguments:")
+                        c.message(f"  &cheight, speed")
+                        return
+
+                    self.level.clouds = (h, s)
+
+                case "edge":
+                    try:
+                        top_id = int(args[1])
+                        side_id = int(args[2])
+                        height = int(args[3])
+                        top_diff = int(args[4])
+                    except:
+                        c.message(f"&cRequired arguments:")
+                        c.message(f"  &ctop id, side id, height, side height")
+                        return
+
+                    self.level.edge = ((top_id, side_id), (height, top_diff))
+
+                case "sky-color":
+                    try:
+                        r = int(args[1])
+                        g = int(args[2])
+                        b = int(args[3])
+                    except:
+                        c.message(f"&cRequired arguments:")
+                        c.message(f"  &cred, green, blue")
+
+                    self.level.colors[0] = (r, g, b)
+
+                case "fog-color":
+                    try:
+                        r = int(args[1])
+                        g = int(args[2])
+                        b = int(args[3])
+                    except:
+                        c.message(f"&cRequired arguments:")
+                        c.message(f"  &cred, green, blue")
+
+                    self.level.colors[2] = (r, g, b)
+
+                case "cloud-color":
+                    try:
+                        r = int(args[1])
+                        g = int(args[2])
+                        b = int(args[3])
+                    except:
+                        c.message(f"&cRequired arguments:")
+                        c.message(f"  &cred, green, blue")
+
+                    self.level.colors[1] = (r, g, b)
+
+                case "diffuse-light":
+                    try:
+                        r = int(args[1])
+                        g = int(args[2])
+                        b = int(args[3])
+                    except:
+                        c.message(f"&cRequired arguments:")
+                        c.message(f"  &cred, green, blue")
+
+                    self.level.colors[4] = (r, g, b)
+
+                case "ambient-light":
+                    try:
+                        r = int(args[1])
+                        g = int(args[2])
+                        b = int(args[3])
+                    except:
+                        c.message(f"&cRequired arguments:")
+                        c.message(f"  &cred, green, blue")
+
+                    self.level.colors[3] = (r, g, b)
+
+                case _:
+                    c.message(f"&cUnknown map property \"{args[0]}\"")
+                    return
+
+            self.update_env_properties()
+        elif msg.startswith("/fill ") and c.oper:
+            args = msg[6:].split()
+
+            if len(args) < 7:
+                c.message("&cUsage: /fill block-id x1 y1 z1 x2 y2 z2")
+                return
+
+            try:
+                block = int(args[0])
+                x1 = int(args[1])
+                y1 = int(args[2])
+                z1 = int(args[3])
+                x2 = int(args[4])
+                y2 = int(args[5])
+                z2 = int(args[6])
+            except Exception as e:
+                c.message("&cUsage: /fill block-id x1 y1 z1 x2 y2 z2")
+                return
+
+            for y in range(y1, y2):
+                for x in range(x1, x2):
+                    for z in range(z1, z2):
+                        self.set_block(Vec3(x, y, z), block)
         else:
-            c.message("&cUnknown command")
+            c.message("&cUnknown or disallowed command")
 
 
 class RequestHandler(socketserver.StreamRequestHandler):
