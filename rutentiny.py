@@ -15,6 +15,7 @@ import threading
 import socket
 import socketserver
 import textwrap
+import re
 from enum import IntEnum
 from struct import pack, unpack, calcsize
 from typing import NamedTuple, Optional, Iterator
@@ -54,7 +55,9 @@ def chunk_iter(data: bytes) -> Iterator[bytes]:
     return (data[pos:pos + 1024] for pos in range(0, len(data), 1024))
 
 
+color_remove_re = re.compile(r'&[0-9a-f]')
 def log(msg: str) -> None:
+    msg = color_remove_re.sub(r'', msg)
     print(f"[{time.strftime('%H:%M:%S')}] " + msg)
 
 
@@ -224,6 +227,8 @@ class Client:
         self.dmg_queue: list[int] = []
         self.held_block: int = 0
         self.model: str = "humanoid"
+        self.kills: int = 0
+        self.deaths: int = 0
 
     def recv(self, size: int) -> bytes:
         try:
@@ -260,6 +265,8 @@ class Client:
             self.send(pack("B", 1))
 
         if self.health < 1:
+            self.deaths += 1
+
             self.server.spawn_effect(1,
                     self.pos - Vec3(0, 24, 0),
                     Vec3(0, 0, 0))
@@ -274,6 +281,9 @@ class Client:
 
             if self.gamemode == 0:
                 self.message("&cYou died!", 100)
+
+            if self.gamemode == 4:
+                self.score_update()
 
         x, y, z = self.pos
         feet_block = self.server.level.get_block(x//32, (y-52)//32, z//32)
@@ -458,11 +468,13 @@ class Client:
 
                 # FIXME: classicube doesnt check for line-of-sight so we
                 # will have to do it instead at some point
-                if self.gamemode == 4:
+                if self.gamemode == 4 and target.gamemode == 4:
                     if data[0] == 0 and data[1] == 0:
                         target.dmg_queue.append(200)
-                        self.server.message(f"&c{self.name} fragged {target.name}")
-                elif self.gamemode == 0:
+                        self.kills += 1
+                        self.server.message(f"&f{self.name} &7x &c{target.name}", 11)
+                        self.score_update()
+                elif self.gamemode == 0 and target.gamemode == 0:
                     dist = self.pos.dist_to(target.pos)
                     yaw = ((self.angle.y / 255) * tau) + (tau / 4)
                     punch = (int(cos(yaw) * -5000), int(sin(yaw) * -5000))
@@ -476,33 +488,43 @@ class Client:
             case _:
                 log(f"{self.name}: Unknown opcode {hex(op)}")
 
-    def health_update(self) -> None:
+    def score_update(self):
+        if ("MessageTypes", 1) in self.cpe_exts:
+            self.message(f"&eScore: \
+&a{self.kills} &f| &c{self.deaths} &f| &7{self.kills - self.deaths}", 12)
+
+    def health_update(self):
         if ("RutentoyGamemode", 1) in self.cpe_exts:
             self.send(pack("Bbbbx", 0xa1, self.health,
                 self.armor, self.air))
         elif ("MessageTypes", 1) in self.cpe_exts:
-            if self.gamemode != 1:
+            # HACK: CC appears to ignore all-space chat messages,
+            # so send a single null byte which appears empty as well
+            if self.health > -1 and self.gamemode != 1:
                 self.message(f"&cHealth: {self.health}", 1)
             else:
-                self.message(" ", 1)
+                self.message("\x00", 1)
 
             if self.armor > -1:
                 self.message(f"&7Armor: {self.armor}", 2)
             else:
-                self.message(" ", 2)
+                self.message("\x00", 2)
 
             if self.air > -1 and self.air < 21:
                 self.message(f"&bAir: {self.air}", 3)
             else:
-                self.message(" ", 3)
+                self.message("\x00", 3)
 
     def set_gamemode(self, mode: str | int) -> None:
         ruten = ("RutentoyGamemode", 1) in self.cpe_exts
 
         self.health = 20
+        self.armor = -1
+        self.air = -1
+        self.kills = 0
+        self.deaths = 0
 
-        speed = 1.0
-        hax = "-hax"
+        hax = "-hax -push"
 
         match mode:
             case "survival" | "0" | 0:
@@ -514,7 +536,7 @@ class Client:
                 if ruten:
                     self.send(pack("BBB", 0xa0, 1, 1))
                 self.gamemode = 1
-                hax = "+hax"
+                hax = "+hax -push"
 
             case "explore" | "2" | 2:
                 if ruten:
@@ -525,13 +547,25 @@ class Client:
                 if ruten:
                     self.send(pack("BBB", 0xa0, 0, 0))
                 self.gamemode = 4
-                speed = 2.0
+                hax = "-hax -push horspeed=2"
 
             case _:
                 self.message("&cInvalid gamemode")
                 return
 
+        # clear the cpe MessageTypes stuff
+        if ("MessageTypes", 1) in self.cpe_exts:
+            self.message("\x00", 1)
+            self.message("\x00", 2)
+            self.message("\x00", 3)
+            self.message("\x00", 11)
+            self.message("\x00", 12)
+            self.message("\x00", 13)
+
         self.health_update()
+
+        if self.gamemode == 4:
+            self.score_update()
 
         if ("InstantMOTD", 1) in self.cpe_exts:
             oper = 0
@@ -540,7 +574,7 @@ class Client:
 
             self.send(pack("BB64s64sB", 0, 7,
                 pad(self.server.config.get("name", "Rutentiny")),
-                pad(f"{hax} horspeed={speed}"), oper))
+                pad(hax), oper))
 
     # NOTE: expects a fixed-point Vec3, unlike teleport
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
@@ -615,6 +649,7 @@ class Level:
 
         self.spawn_points = []
         self.gamemode = "creative"
+        self.name = "Unnamed"
 
         self.map = bytearray(self.xs * self.ys * self.zs)
         self.edge = ((BlockID.WATER, BlockID.BEDROCK), (self.ys // 2, -2))
@@ -657,6 +692,7 @@ class Level:
                     point[1].x, point[1].y))
 
             file.write(pad(self.gamemode))
+            file.write(pad(self.name))
 
     def load(self, path: str) -> None:
         self.ready = False
@@ -705,6 +741,8 @@ class Level:
                             Vec2(*unpack("BB", file.read(2)))))
 
                 self.gamemode = file.read(64).strip().decode("cp437")
+
+                self.name = (file.read(64) or b"").strip().decode("cp437")
             else:
                 log(f"Invalid map format {repr(magic)}")
                 raise ValueError(f"Invalid map format {repr(magic)}")
@@ -1441,7 +1479,9 @@ class ServerState:
             c.send(pack("!BhhhB", 6, pos.x, pos.y, pos.z, block))
 
     def message(self, msg: str, type: int = 0) -> None:
-        log(msg)
+        if type == 0:
+            log(msg)
+
         chunks = pad_msg(msg)
 
         # don't use Client.message so we only have to pad_msg once
@@ -1570,17 +1610,12 @@ class ServerState:
             args = msg[4:].split(" ")
 
             try:
-                x, y, z = int(args[0]), int(args[1]), int(args[2])
-                c.teleport(Vec3(x, y, z), c.angle)
+                c.teleport(Vec3(int(args[0]), int(args[1]), int(args[2])), c.angle)
             except:
                 c.message("&cUsage: /tp x y z")
         elif msg.startswith("/add-spawn") and (c.gamemode == 1 or c.oper):
             self.level.spawn_points.append((c.pos, c.angle))
             c.message(f"Added new spawn point at {c.pos}, {c.angle}")
-        elif msg.startswith("/level-gamemode ") and c.oper:
-            mode = msg[15:].strip()
-            self.level.gamemode = mode
-            c.message(f"Default gamemode set to {mode}")
         elif msg.startswith("/tree") and c.gamemode == 1:
             self.level.tree(c.pos.x//32, c.pos.y//32-1, c.pos.z//32)
         elif msg.startswith("/model "):
@@ -1677,6 +1712,32 @@ class ServerState:
                         return
 
                     self.level.colors[3] = (r, g, b)
+
+                case "name":
+                    if len(args) < 2:
+                        c.message(f"Map name: &e{self.level.name}")
+                        return
+
+                    try:
+                        newname = " ".join(args[1:])
+                    except:
+                        return
+
+                    self.level.name = newname
+                    c.message(f"Map name: &e{self.level.name}")
+
+                case "gamemode":
+                    if len(args) < 2:
+                        c.message(f"Level gamemode: &e{self.level.gamemode}")
+                        return
+
+                    try:
+                        newgm = args[1]
+                    except:
+                        return
+
+                    self.level.gamemode = newgm
+                    c.message(f"Level gamemode: &e{self.level.gamemode}")
 
                 case _:
                     c.message(f"&cUnknown map property \"{args[0]}\"")
