@@ -24,6 +24,7 @@ try:
     simplex_available = True
 except:
     print("opensimplex unavailable, falling back to bad noise algorithm")
+    simplex_available = False
 
 
 def pad(msg: str) -> bytes:
@@ -397,7 +398,13 @@ class Client:
                         self.pos.z // 32)
                 old_pos = self.pos
 
-                block, x, y, z, yaw, pitch = unpack("!BhhhBB", self.recv(9))
+                if ("ExtEntityPositions", 1) in self.cpe_exts:
+                    strucdef = "!BiiiBB"
+                else:
+                    strucdef = "!BhhhBB"
+
+                block, x, y, z, yaw, pitch = unpack(strucdef,
+                        self.recv(calcsize(strucdef)))
                 self.old_pos = self.pos
                 self.old_angle = self.angle
                 self.pos = Vec3(x, y, z)
@@ -537,14 +544,25 @@ class Client:
 
     # NOTE: expects a fixed-point Vec3, unlike teleport
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
-        self.send(pack("!BB64shhhBB", 7, 255, pad(self.name),
+        if ("ExtEntityPositions", 1) in self.cpe_exts:
+            strucdef = "!BB64siiiBB"
+        else:
+            strucdef = "!BB64shhhBB"
+
+        self.send(pack(strucdef, 7, 255, pad(self.name),
             pos.x, pos.y, pos.z, angle.y, angle.x))
 
     def teleport(self, pos: Vec3, angle: Vec2) -> None:
         self.pos = pos
         self.angle = angle
         fpos = Vec3.to_fixed(pos.x + .5, pos.y, pos.z + .5)
-        self.send(pack("!BBhhhBB", 8, 255,
+
+        if ("ExtEntityPositions", 1) in self.cpe_exts:
+            strucdef = "!BBiiiBB"
+        else:
+            strucdef = "!BBhhhBB"
+
+        self.send(pack(strucdef, 8, 255,
             fpos.x, fpos.y, fpos.z,
             angle.y, angle.x))
 
@@ -555,7 +573,7 @@ class Client:
 
     def message(self, msg: str, type: int = 0) -> None:
         # NOTE: wiki.vg doesn't document all of CC's capabilities,
-        # maybe 'big announcement' and 'small announcement' aren't standard CPE
+        # maybe types 101 and 102 aren't standard CPE
         # 0: normal chat
         # 1: top-right 1
         # 2: top-right 2
@@ -1211,12 +1229,17 @@ class ServerState:
             self.message(f"{c.name} joined")
 
         for cl in self.clients:
+            if ("ExtEntityPositions", 1) in c.cpe_exts:
+                strucdef = "!BB64siiiBB"
+            else:
+                strucdef = "!BB64shhhBB"
+
             if c != cl:
-                c.send(pack("!BB64shhhBB", 7, self.clients.index(cl),
+                c.send(pack(strucdef, 7, self.clients.index(cl),
                     pad(cl.name), cl.pos.x, cl.pos.y, cl.pos.z,
                     cl.angle.y, cl.angle.x))
 
-                cl.send(pack("!BB64shhhBB", 7, self.clients.index(c),
+                cl.send(pack(strucdef, 7, self.clients.index(c),
                     pad(c.name), c.pos.x, c.pos.y, c.pos.z,
                     c.angle.y, c.angle.x))
 
@@ -1258,7 +1281,7 @@ class ServerState:
             pad(self.config.get("motd", "My Cool Server")), oper))
 
     def cpe_handshake(self, c: Client) -> None:
-        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 11))
+        c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 12))
         c.send(pack("!B64sI", 17, b"RutentoyGamemode", 1))
         c.send(pack("!B64sI", 17, b"CustomBlocks", 1))
         c.send(pack("!B64sI", 17, b"EnvMapAspect", 1))
@@ -1270,6 +1293,7 @@ class ServerState:
         c.send(pack("!B64sI", 17, b"PlayerClick", 1))
         c.send(pack("!B64sI", 17, b"HeldBlock", 1))
         c.send(pack("!B64sI", 17, b"CustomParticles", 1))
+        c.send(pack("!B64sI", 17, b"ExtEntityPositions", 1))
         cname, extnum = unpack("!x64sH", c.recv(67))
 
         for i in range(0, extnum):
@@ -1361,8 +1385,15 @@ class ServerState:
         i = self.clients.index(c)
 
         for cl in self.clients:
-            if c == cl: continue
-            cl.send(pack("!BBhhhBB", 8, i, c.pos.x, c.pos.y, c.pos.z,
+            if c == cl:
+                continue
+
+            if ("ExtEntityPositions", 1) in cl.cpe_exts:
+                strucdef = "!BBiiiBB"
+            else:
+                strucdef = "!BBhhhBB"
+
+            cl.send(pack(strucdef, 8, i, c.pos.x, c.pos.y, c.pos.z,
                 c.angle.y, c.angle.x))
 
     def set_playermodel(self, c: Client, model: str, scale: int = 1000) -> None:
@@ -1595,6 +1626,7 @@ class ServerState:
                     except:
                         c.message(f"&cRequired arguments:")
                         c.message(f"  &cred, green, blue")
+                        return
 
                     self.level.colors[0] = (r, g, b)
 
@@ -1606,6 +1638,7 @@ class ServerState:
                     except:
                         c.message(f"&cRequired arguments:")
                         c.message(f"  &cred, green, blue")
+                        return
 
                     self.level.colors[2] = (r, g, b)
 
@@ -1617,6 +1650,7 @@ class ServerState:
                     except:
                         c.message(f"&cRequired arguments:")
                         c.message(f"  &cred, green, blue")
+                        return
 
                     self.level.colors[1] = (r, g, b)
 
@@ -1628,6 +1662,7 @@ class ServerState:
                     except:
                         c.message(f"&cRequired arguments:")
                         c.message(f"  &cred, green, blue")
+                        return
 
                     self.level.colors[4] = (r, g, b)
 
@@ -1639,6 +1674,7 @@ class ServerState:
                     except:
                         c.message(f"&cRequired arguments:")
                         c.message(f"  &cred, green, blue")
+                        return
 
                     self.level.colors[3] = (r, g, b)
 
