@@ -79,11 +79,16 @@ class Vec3(NamedTuple):
     def __sub__(self, other: "Vec3") -> "Vec3":
         return Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
 
-    def to_fixed(x: float, y: float, z: float) -> "Vec3":
+    def to_fixed(x: float, y: float, z: float, ext: bool = False) -> "Vec3":
+        if ext:
+            limit = 2**31
+        else:
+            limit = 2**15
+
         return Vec3(
-                int(clamp(x * 32, -32768, 32767)),
-                int(clamp((y * 32) + 51, -32768, 32767)),
-                int(clamp(z * 32, -32768, 32767)))
+                int(clamp(x * 32, -limit, limit - 1)),
+                int(clamp((y * 32) + 51, -limit, limit - 1)),
+                int(clamp(z * 32, -limit, limit - 1)))
 
     def dist_to(self, other: "Vec3") -> float:
         from math import sqrt
@@ -280,9 +285,8 @@ class Client:
             self.spawn(spawn_pos[0], spawn_pos[1])
 
             if self.gamemode == 0:
-                self.message("&cYou died!", 100)
-
-            if self.gamemode == 4:
+                self.message("&eYou died!", 100)
+            elif self.gamemode == 4:
                 self.score_update()
 
         x, y, z = self.pos
@@ -1089,7 +1093,6 @@ class Level:
             c.send(pack("!Bi", 2, len(self.map)))
         else:
             c.send(pack("B", 2))
-
 
         if ("BlockDefinitions", 1) in c.cpe_exts:
             c.send(pack("BB64sBBBBBBBBBBBBBB",
