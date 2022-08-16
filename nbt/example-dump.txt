@@ -1,0 +1,77 @@
+Compound('ClassicWorld', [
+	Byte('FormatVersion', 1),
+	Binary('UUID', bytes(16)),
+	Short('X', 16),
+	Short('Y', 16),
+	Short('Z', 16),
+	Compound('Spawn', [
+	    Short('X', 8),
+	    Short('Y', 8),
+	    Short('Z', 12),
+	    Byte('H', 0),
+	    Byte('P', 0)
+	]),
+	Binary('BlockArray', bytes(4096)),
+	Compound('Metadata', [
+	    Compound('CPE', [
+		Compound('ClickDistance', [
+		    Short('Distance', 160)
+		]),
+		Compound('EnvWeatherType', [
+		    Byte('WeatherType', 0)
+		]),
+		Compound('EnvColors', [
+		    Compound('Sky', [
+			Short('R', 99),
+			Short('G', 155),
+			Short('B', 255)
+		    ]),
+		    Compound('Cloud', [
+			Short('R', 255),
+			Short('G', 255),
+			Short('B', 255)
+		    ]),
+		    Compound('Fog', [
+			Short('R', 203),
+			Short('G', 219),
+			Short('B', 252)
+		    ]),
+		    Compound('Ambient', [
+			Short('R', 132),
+			Short('G', 126),
+			Short('B', 135)
+		    ]),
+		    Compound('Sunlight', [
+			    Short('R', 255),
+			    Short('G', 255),
+			    Short('B', 255)
+		    ]),
+		    Compound('Skybox', [
+			    Short('R', 255),
+			    Short('G', 255),
+			    Short('B', 255)
+		    ])
+		    ]),
+		    Compound('EnvMapAppearance', [
+			    Byte('SideBlock', 7),
+			    Byte('EdgeBlock', 9),
+			    Short('SideLevel', 8),
+			    String('TextureURL', '')
+		    ]),
+		    Compound('EnvMapAspect', [
+			    Short('EdgeBlock', 9),
+			    Short('SideBlock', 7),
+			    Int('EdgeHeight', 8),
+			    Int('SidesOffset', -2),
+			    Int('CloudsHeight', 18),
+			    Float('CloudsSpeed', 1.0),
+			    Float('WeatherSpeed', 1.0),
+			    Float('WeatherFade', 1.0),
+			    Byte('ExpFog', 0),
+			    Float('SkyboxHor', 0.0),
+			    Float('SkyboxVer', 0.0)
+		    ]),
+		    Compound('BlockDefinitions', [])
+		    ])
+		    ])
+		    ])

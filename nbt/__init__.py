@@ -9,42 +9,72 @@ class Byte(NamedTuple):
     key: str | None
     val: int
 
+    def __repr__(self) -> str:
+        return f"Byte({self.key!r}, {self.val!r})"
+
 class Short(NamedTuple):
     key: str | None
     val: int
+
+    def __repr__(self) -> str:
+        return f"Short({self.key!r}, {self.val!r})"
 
 class Int(NamedTuple):
     key: str | None
     val: int
 
+    def __repr__(self) -> str:
+        return f"Int({self.key!r}, {self.val!r})"
+
 class Long(NamedTuple):
     key: str | None
     val: int
+
+    def __repr__(self) -> str:
+        return f"Long({self.key!r}, {self.val!r})"
 
 class Float(NamedTuple):
     key: str | None
     val: float
 
+    def __repr__(self) -> str:
+        return f"Float({self.key!r}, {self.val!r})"
+
 class Double(NamedTuple):
     key: str | None
     val: float
+
+    def __repr__(self) -> str:
+        return f"Double({self.key!r}, {self.val!r})"
 
 class Binary(NamedTuple):
     key: str | None
     val: bytes
 
+    def __repr__(self) -> str:
+        return f"Binary({self.key!r}, bytes({len(self.val)}))"
+
 class String(NamedTuple):
     key: str | None
     val: str
+
+    def __repr__(self) -> str:
+        return f"String({self.key!r}, {self.val!r})"
 
 class List(NamedTuple):
     key: str | None
     val: list
     type: int
 
+    def __repr__(self) -> str:
+        return f"List({self.key!r}, {self.val!r})"
+
 class Compound(NamedTuple):
     key: str | None
     val: list
+
+    def __repr__(self) -> str:
+        return f"Compound({self.key!r}, {self.val!r})"
 
 
 def _runpack(s, st):
