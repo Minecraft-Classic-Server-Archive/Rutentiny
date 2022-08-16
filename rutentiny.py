@@ -27,22 +27,23 @@ except:
     print("opensimplex unavailable, falling back to bad noise algorithm")
     simplex_available = False
 
+# FIXME: this could truncate UTF-8 sequences
+def pad(msg: str, encoding: str = "ascii") -> bytes:
+    return msg.ljust(64).encode(encoding, "replace")
 
-def pad(msg: str) -> bytes:
-    return msg.ljust(64).encode("cp437")
 
-
+# hack to get textwrap to leave cp437 control characters alone
 msg_pad_wrapper = textwrap.TextWrapper(
         width=64,
         subsequent_indent="  ",
         expand_tabs=False,
         tabsize=1,
         replace_whitespace=False)
-def pad_msg(msg: str) -> list[bytes]:
+def pad_msg(msg: str, encoding: str = "ascii") -> list[bytes]:
     from textwrap import wrap
     buf = []
     for line in msg_pad_wrapper.wrap(msg):
-        buf.append(pad(line))
+        buf.append(pad(line, encoding))
     return buf
 
 
@@ -79,16 +80,19 @@ class Vec3(NamedTuple):
     def __sub__(self, other: "Vec3") -> "Vec3":
         return Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
 
-    def to_fixed(x: float, y: float, z: float, ext: bool = False) -> "Vec3":
+    def to_block(self) -> "Vec3":
+        return Vec3(self.x // 32, (self.y - 51) // 32, self.z // 32)
+
+    def to_fixed(self, ext: bool = False) -> "Vec3":
         if ext:
             limit = 2**31
         else:
             limit = 2**15
 
         return Vec3(
-                int(clamp(x * 32, -limit, limit - 1)),
-                int(clamp((y * 32) + 51, -limit, limit - 1)),
-                int(clamp(z * 32, -limit, limit - 1)))
+                int(clamp(self.x * 32, -limit, limit - 1)),
+                int(clamp((self.y * 32) + 51, -limit, limit - 1)),
+                int(clamp(self.z * 32, -limit, limit - 1)))
 
     def dist_to(self, other: "Vec3") -> float:
         from math import sqrt
@@ -211,6 +215,8 @@ class Client:
     """
 
     def __init__(self, socket, server: "ServerState"):
+        from collections import deque
+
         self.socket = socket
         self.server: "ServerState" = server
         self.name: str = "unnamed"
@@ -229,11 +235,13 @@ class Client:
         self.oper: bool = False
         self.disconnected: bool = False
         self.msg_buffer: bytearray = bytearray()
-        self.dmg_queue: list[int] = []
+        self.dmg_queue: deque[int] = deque([])
         self.held_block: int = 0
         self.model: str = "humanoid"
         self.kills: int = 0
         self.deaths: int = 0
+        #self.locale: str = "en-US"     # TODO: is this useful for anything?
+        self.encoding: str = "ascii"
 
     def recv(self, size: int) -> bytes:
         try:
@@ -358,11 +366,14 @@ class Client:
                 try:
                     ver, name, key, pad = unpack("B64s64sB",
                             self.recv(130))
-                    self.name = name.strip().decode("cp437")
-                    self.key = key.strip().decode("ascii")
+                    self.name = name.strip().decode("ascii", "replace")
+                    self.key = key.strip().decode("ascii", "replace")
                 except:
-                    log(f"client sent bad login packet")
                     self.kick("Corrupted login packet")
+                    return
+
+                if self.name in self.server.config.get("banned", []):
+                    self.kick("Banned")
                     return
 
                 if len(self.server.clients) >= self.server.max_clients:
@@ -385,10 +396,15 @@ class Client:
 
                 self.server.send_id(self)
                 self.server.level.send_to_client(self)
-                spawnpos = self.server.level.get_spawnpoint()
-                self.spawn(spawnpos[0], spawnpos[1])
-                self.set_gamemode(self.server.level.gamemode)
                 self.server.add_client(self)
+                self.spawn(*self.server.level.get_spawnpoint())
+                self.set_gamemode(self.server.level.gamemode)
+
+                # we can dream
+                if ("UTF-8", 1) in self.cpe_exts:
+                    self.encoding = "utf_8"
+                elif ("FullCP437", 1) in self.cpe_exts:
+                    self.encoding = "cp437"
 
             # block set
             case 5:
@@ -450,7 +466,7 @@ class Client:
                 self.msg_buffer += msg
 
                 if ext == 0:
-                    msg = self.msg_buffer.strip().decode("cp437")
+                    msg = self.msg_buffer.strip().decode(self.encoding, "replace")
                     msg = re.sub(r'%([0-9a-f])', r'&\1', msg)
                     self.msg_buffer = bytearray()
                     self.server.handle_message(self, msg)
@@ -570,6 +586,13 @@ class Client:
 
         if self.gamemode == 4:
             self.score_update()
+            if ("HeldBlock", 1) in self.cpe_exts:
+                # HoldThis
+                self.send(pack("BBB", 20, BlockID.NONE, 1))
+        else:
+            if ("HeldBlock", 1) in self.cpe_exts:
+                # HoldThis
+                self.send(pack("BBB", 20, BlockID.NONE, 0))
 
         if ("InstantMOTD", 1) in self.cpe_exts:
             oper = 0
@@ -593,7 +616,7 @@ class Client:
     def teleport(self, pos: Vec3, angle: Vec2) -> None:
         self.pos = pos
         self.angle = angle
-        fpos = Vec3.to_fixed(pos.x + .5, pos.y, pos.z + .5)
+        fpos = Vec3(pos.x + .5, pos.y, pos.z + .5).to_fixed()
 
         if ("ExtEntityPositions", 1) in self.cpe_exts:
             strucdef = "!BBiiiBB"
@@ -605,7 +628,7 @@ class Client:
             angle.y, angle.x))
 
     def kick(self, reason: str) -> None:
-        self.send(b"\x0e" + pad(reason))
+        self.send(b"\x0e" + pad(reason, self.encoding))
         self.server.remove_client(self)
         self.disconnected = True
 
@@ -625,7 +648,7 @@ class Client:
         if ("MessageTypes", 1) not in self.cpe_exts:
             type = 0
 
-        chunks = pad_msg(msg)
+        chunks = pad_msg(msg, self.encoding)
         for chunk in chunks:
             self.send(pack("BB64s", 13, type, chunk))
 
@@ -651,7 +674,9 @@ class Level:
         else:
             self.xs, self.ys, self.zs = size
 
-        self.spawn_points = []
+        self.spawn_points: list[tuple[Vec3, Vec2]] = [
+                (Vec3(self.xs/2, self.ys+1, self.zs/2).to_fixed(), Vec2(0, 0)),
+                ]
         self.gamemode = "creative"
         self.name = "Unnamed"
 
@@ -695,8 +720,8 @@ class Level:
                 file.write(pack("!iiiBB", point[0].x, point[0].y, point[0].z,
                     point[1].x, point[1].y))
 
-            file.write(pad(self.gamemode))
-            file.write(pad(self.name))
+            file.write(pad(self.gamemode, "ascii"))
+            file.write(pad(self.name, "ascii"))
 
     def load(self, path: str) -> None:
         self.ready = False
@@ -744,9 +769,8 @@ class Level:
                             Vec3(*unpack("!iii", file.read(12))),
                             Vec2(*unpack("BB", file.read(2)))))
 
-                self.gamemode = file.read(64).strip().decode("cp437")
-
-                self.name = (file.read(64) or b"").strip().decode("cp437")
+                self.gamemode = file.read(64).strip().decode("ascii", "replace")
+                self.name = (file.read(64) or b"").strip().decode("ascii", "replace")
             else:
                 log(f"Invalid map format {repr(magic)}")
                 raise ValueError(f"Invalid map format {repr(magic)}")
@@ -757,10 +781,7 @@ class Level:
         from random import choice
 
         if len(self.spawn_points) < 1:
-            return (Vec3.to_fixed(
-                (self.xs//2),
-                (self.ys+1),
-                (self.zs//2)),
+            return (Vec3(self.xs//2, self.ys+1, self.zs//2).to_fixed(),
                     Vec2(0, 0))
         else:
             return choice(self.spawn_points)
@@ -1303,8 +1324,9 @@ class ServerState:
             path = f"autosave-{int(time.time())}.rtm"
             self.level.save(self.config.get("map_path", ".") + "/" + path)
 
+        reasonpad = pad(reason)
         for c in self.clients:
-            c.send(b"\x0e" + pad(reason))
+            c.send(b"\x0e" + reasonpad)
             c.disconnected = True
 
         self.clients = []
@@ -1415,9 +1437,14 @@ class ServerState:
 
     def tick(self) -> None:
         for c in self.clients:
+            # if a player crashed or lost connection, remove them
+            if c.disconnected:
+                self.remove_client(c)
+
             if c.pos != c.old_pos or c.angle != c.old_angle:
                 self.player_move(c)
             c.tick()
+
         timer = threading.Timer(1 / 20, self.tick)
         timer.daemon = True
         timer.start()
@@ -1485,14 +1512,10 @@ class ServerState:
         if type == 0:
             log(msg)
 
-        chunks = pad_msg(msg)
-
-        # don't use Client.message so we only have to pad_msg once
         for c in self.clients:
-            for chunk in chunks:
-                c.send(pack("BB64s", 13,
-                    type if ("MessageTypes", 1) in c.cpe_exts else 0,
-                    chunk))
+            # re-encoding for each client is a necessary evil to support
+            # multiple character encodings
+            c.message(msg, type)
 
     def sys_command(self, args: list[str]) -> None:
         if len(args) < 1:
@@ -1613,25 +1636,47 @@ class ServerState:
             args = msg[4:].split(" ")
 
             try:
-                c.teleport(Vec3(int(args[0]), int(args[1]), int(args[2])), c.angle)
+                c.teleport(Vec3(int(args[0]), int(args[1]), int(args[2])),
+                        c.angle)
             except:
                 c.message("&cUsage: /tp x y z")
-        elif msg.startswith("/add-spawn") and (c.gamemode == 1 or c.oper):
-            self.level.spawn_points.append((c.pos, c.angle))
-            c.message(f"Added new spawn point at {c.pos}, {c.angle}")
         elif msg.startswith("/tree") and c.gamemode == 1:
-            self.level.tree(c.pos.x//32, c.pos.y//32-1, c.pos.z//32)
-        elif msg.startswith("/model "):
+            self.level.tree(*c.pos.to_block())
+        elif msg.startswith("/model ") and (c.gamemode == 1 or c.oper):
             self.set_playermodel(c, msg[7:])
-        elif msg.startswith("/map-property ") and c.oper:
-            args = msg[14:].split()
+        elif msg.startswith("/lp ") and (c.gamemode == 1 or c.oper):
+            args = msg[4:].split()
 
             if len(args) < 1:
-                c.message("&cAvailable properties:")
-                c.message("&c  clouds")
+                c.message("&eAvailable properties:")
+                c.message("&e  name, gamemode, spawns,")
+                c.message("&e  clouds, edge, sky-color, fog-color,")
+                c.message("&e  cloud-color, diffuse-light, ambient-light")
                 return
 
             match args[0]:
+                case "spawns":
+                    if len(args) < 2:
+                        c.message("&espawns (list, remove, add)")
+                        return
+
+                    if args[1] == "list":
+                        c.message("&eSpawn points:")
+                        for i in range(len(self.level.spawn_points)):
+                            point, _ = self.level.spawn_points[i]
+                            c.message(f"&e{i:>4}: {point.to_block()}")
+                    elif args[1] == "remove":
+                        try:
+                            i = int(args[2])
+                            self.level.spawn_points.pop(i)
+                            c.message(f"&eRemoved spawn point {i}")
+                        except:
+                            c.message("&cUsage: spawns remove index")
+                    elif args[1] == "add":
+                        self.level.spawn_points.append((c.pos, c.angle))
+                        c.message(f"&eAdded new spawn point at {c.pos.to_block()}")
+                    return
+
                 case "clouds":
                     try:
                         h = int(args[1])
