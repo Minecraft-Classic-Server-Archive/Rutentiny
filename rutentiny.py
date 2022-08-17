@@ -185,6 +185,9 @@ class BlockID(IntEnum):
     ACID = 11,
     JUMP_PAD = 66,
 
+    # !! keep this up to date or find an automatic solution
+    MAXIMUM = 67,
+
     def cpe_fallback(block: "BlockID") -> "BlockID":
         match block:
             case BlockID.COBBLESTONE_SLAB: return BlockID.SMOOTH_STONE_SLAB
@@ -545,18 +548,21 @@ class Client:
         self.deaths = 0
 
         hax = "-hax -push"
+        allow_block = 0
 
         match mode:
             case "survival" | "0" | 0:
                 if ruten:
                     self.send(pack("BBB", 0xa0, 0, 1))
                 self.gamemode = 0
+                allow_block = 1
 
             case "creative" | "1" | 1:
                 if ruten:
                     self.send(pack("BBB", 0xa0, 1, 1))
                 self.gamemode = 1
                 hax = "+hax -push"
+                allow_block = 1
 
             case "explore" | "2" | 2:
                 if ruten:
@@ -584,6 +590,13 @@ class Client:
 
         self.health_update()
 
+        # RutentoyGamemode will already provide this functionality but
+        # upstream ClassiCube needs this to enforce block access
+        if ("BlockPermissions", 1) in self.cpe_exts:
+            for i in range(1, BlockID.MAXIMUM):
+                # SetBlockPermission
+                self.send(pack("BBBB", 28, i, allow_block, allow_block))
+
         if self.gamemode == 4:
             self.score_update()
             if ("HeldBlock", 1) in self.cpe_exts:
@@ -594,14 +607,12 @@ class Client:
                 # HoldThis
                 self.send(pack("BBB", 20, BlockID.NONE, 0))
 
+        # ClassiCube is really really picky has SetBlockPermission/oper mode
+        # conflicts that make it really annoying to enable/disable all blocks
         if ("InstantMOTD", 1) in self.cpe_exts:
-            oper = 0
-            if self.oper:
-                oper = 100
-
             self.send(pack("BB64s64sB", 0, 7,
                 pad(self.server.config.get("name", "Rutentiny")),
-                pad(hax), oper))
+                pad(hax), 100 if allow_block else 0))
 
     # NOTE: expects a fixed-point Vec3, unlike teleport
     def spawn(self, pos: Vec3, angle: Vec2) -> None:
@@ -808,7 +819,7 @@ class Level:
         if i < 0 or i >= len(self.map):
             return BlockID.NONE
 
-        return typing.cast(BlockID, self.map[i])
+        return BlockID(self.map[i])
 
     def noise(self, x: float, y: float) -> float:
         if simplex_available:
@@ -1333,15 +1344,14 @@ class ServerState:
         self.alive = False
 
     def send_id(self, c: Client) -> None:
-        oper = 0
-
         if c.name in self.config.get("opers", []):
             c.oper = True
-            oper = 100
 
+        # always set the client type to operator to allow special blocks,
+        # afaik the client doesn't do anything else with it
         c.send(pack("BB64s64sB", 0, 7,
             pad(self.config.get("name", "Rutentiny")),
-            pad(self.config.get("motd", "My Cool Server")), oper))
+            pad(self.config.get("motd", "My Cool Server")), 100))
 
     def cpe_handshake(self, c: Client) -> None:
         c.send(pack("!B64sH", 16, b"Rutentiny 0.1.0", 12))
