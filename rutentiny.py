@@ -664,6 +664,41 @@ class Client:
             self.send(pack("BB64s", 13, type, chunk))
 
 
+class NPCEntity(Client):
+    def __init__(self, server: "ServerState", model: str):
+        super().__init__(None, server)
+        self.model = model
+        self.name = ""
+
+    def recv(self, size: int) -> bytes:
+        return b""
+
+    def send(self, data: bytes) -> None:
+        pass
+
+    def packet(self):
+        pass
+
+    def tick(self):
+        if self.disconnected:
+            return
+
+    def spawn(self, pos: Vec3, angle: Vec2) -> None:
+        self.pos = pos
+        self.angle = angle
+        self.server.set_playermodel(self, self.model)
+
+    def teleport(self, pos: Vec3, angle: Vec2) -> None:
+        self.pos = pos
+        self.angle = angle
+
+    def kick(self, reason: str | None) -> None:
+        self.disconnected = True
+
+    def message(self, msg: str, type: int = 0) -> None:
+        pass
+
+
 class Level:
     """
     Stores block data and provides functions for disk and network IO.
@@ -1027,9 +1062,10 @@ class Level:
         self.ready = False
         log("Generating Moon map")
         self.edge = ((BlockID.GRAVEL, BlockID.BEDROCK), (self.ys // 2, 0))
+        self.clouds = (-16, 1)
         self.colors = [
                 (0x00, 0x00, 0x00), # sky
-                (0x00, 0x00, 0x00), # clouds
+                (0xdf, 0x71, 0x26), # clouds
                 (0x00, 0x00, 0x00), # fog
                 (0x5f, 0x5f, 0x5f), # block ambient
                 (0xff, 0xff, 0xff), # block diffuse
@@ -1302,7 +1338,7 @@ class ServerState:
             self.message(f"{c.name} joined")
 
         for cl in self.clients:
-            if ("ExtEntityPositions", 1) in c.cpe_exts:
+            if ("ExtEntityPositions", 1) in cl.cpe_exts:
                 strucdef = "!BB64siiiBB"
             else:
                 strucdef = "!BB64shhhBB"
@@ -1327,6 +1363,30 @@ class ServerState:
             c.send(pack("BB", 12, i))
 
         self.clients.remove(c)
+
+    def add_npc(self, npc: NPCEntity, name: str,
+            pos: Vec3, angle: Vec2) -> None:
+        if npc in self.clients:
+            return
+
+        npc.pos = pos
+        npc.angle = angle
+        npc.name = name
+        self.clients.append(npc)
+        npci = self.clients.index(npc)
+
+        for cl in self.clients:
+            if ("ExtEntityPositions", 1) in cl.cpe_exts:
+                strucdef = "!BB64siiiBB"
+            else:
+                strucdef = "!BB64shhhBB"
+
+            if cl is not NPCEntity:
+                cl.send(pack(strucdef, 7, npci,
+                    pad(npc.name), npc.pos.x, npc.pos.y, npc.pos.z,
+                    npc.angle.y, npc.angle.x))
+
+        self.set_playermodel(npc, npc.model)
 
     def shutdown(self, reason: str) -> None:
         log("Server shutting down")
@@ -1481,7 +1541,7 @@ class ServerState:
         c.model = model
 
         for cl in self.clients:
-            if ("ChangeModel", 1) not in c.cpe_exts:
+            if ("ChangeModel", 1) not in cl.cpe_exts:
                 continue
 
             # ChangeModel
@@ -1490,7 +1550,7 @@ class ServerState:
             else:
                 cl.send(pack("!Bb64s", 29, i, models))
 
-            if ("EntityProperty", 1) not in c.cpe_exts:
+            if ("EntityProperty", 1) not in cl.cpe_exts:
                 continue
 
             # SetEntityProperty
@@ -1825,6 +1885,15 @@ class ServerState:
                 for x in range(x1, x2):
                     for z in range(z1, z2):
                         self.set_block(Vec3(x, y, z), block)
+        elif msg.startswith("/spawn ") and c.oper:
+            c.message("&cNPCs are unfinished and will break your server!")
+            model = msg[7:]
+            model, _, name = model.partition(" ")
+            if model:
+                self.add_npc(NPCEntity(self, model), name or "",
+                        c.pos, c.angle)
+            else:
+                c.message("&cUsage: /spawn type [name]")
         else:
             c.message("&cUnknown or disallowed command")
 
