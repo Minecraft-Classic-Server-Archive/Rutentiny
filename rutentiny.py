@@ -425,12 +425,6 @@ class Client:
 
             # position update
             case 8:
-                old_feet = self.server.level.get_block(
-                        self.pos.x // 32,
-                        (self.pos.y - 52) // 32,
-                        self.pos.z // 32)
-                old_pos = self.pos
-
                 if ("ExtEntityPositions", 1) in self.cpe_exts:
                     strucdef = "!BiiiBB"
                 else:
@@ -450,16 +444,6 @@ class Client:
                     else:
                         self.server.set_playermodel(self, "humanoid", 1000)
 
-                new_feet = self.server.level.get_block(
-                        self.pos.x // 32,
-                        (self.pos.y - 52) // 32,
-                        self.pos.z // 32)
-
-                if old_feet != BlockID.WATER and new_feet == BlockID.WATER:
-                    self.server.spawn_effect(2,
-                            self.pos - Vec3(0, 51, 0),
-                            Vec3(0, 100, 0))
-
                 self.held_block = block
 
             # message
@@ -469,7 +453,8 @@ class Client:
                 self.msg_buffer += msg
 
                 if ext == 0:
-                    msg = self.msg_buffer.strip().decode(self.encoding, "replace")
+                    msg = self.msg_buffer.strip().decode(self.encoding,
+                            "replace")
                     msg = re.sub(r'%([0-9a-f])', r'&\1', msg)
                     self.msg_buffer = bytearray()
                     self.server.handle_message(self, msg)
@@ -495,7 +480,8 @@ class Client:
                     if data[0] == 0 and data[1] == 0:
                         target.dmg_queue.append(200)
                         self.kills += 1
-                        self.server.message(f"&f{self.name} &7x &c{target.name}", 11)
+                        self.server.message(
+                                f"&f{self.name} &7x &c{target.name}", 11)
                         self.score_update()
                 elif self.gamemode == 0 and target.gamemode == 0:
                     dist = self.pos.dist_to(target.pos)
@@ -1260,25 +1246,6 @@ class Level:
                 32,                 # Spread
                 1000,               # Speed (/10k)
                 -1000,              # Gravity (/10k)
-                5000,               # Lifetime (/10k)
-                5000,               # LifetimeVariation (/10k)
-                0b01110000,         # CollisionFlags
-                0                   # FullBright
-                ))
-
-            # water splash particle
-            c.send(pack("!BBBBBBBBBBBBiHiiiiBB",
-                48,                 # DefineEffect
-                2,                  # EffectID
-                0, 16, 15, 31,      # UV
-                0xFF, 0xFF, 0xFF,   # Color
-                2,                  # FrameCount
-                6,                  # ParticleCount
-                8,                  # Size (/32)
-                5000,               # SizeVariation
-                20,                 # Spread (/32)
-                12000,              # Speed (/10k)
-                60000,              # Gravity (/10k)
                 5000,               # Lifetime (/10k)
                 5000,               # LifetimeVariation (/10k)
                 0b01110000,         # CollisionFlags
