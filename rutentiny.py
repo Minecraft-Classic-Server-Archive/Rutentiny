@@ -383,14 +383,15 @@ class Client:
                     self.kick("Server is full")
                     return
 
-                if self.server.key:
+                if self.server.config.get("heartbeat_url", None):
+                    from hashlib import md5
+                    expect_key = md5(self.server.key.encode() + name.rstrip(b" ")).hexdigest()
+                    if self.key != expect_key:
+                        self.kick("Invalid login key")
+                        return
+                elif self.server.key:
                     if self.server.key != self.key:
                         self.kick("Invalid passkey")
-                        return
-                elif self.server.config.get("heartbeat_url", None):
-                    from hashlib import md5
-                    if key != md5(self.server.key.encode() + name):
-                        self.kick("Invalid login key")
                         return
 
                 if pad == 0x42:
@@ -1904,19 +1905,32 @@ class HeartBeater:
         url += f"port={cfg('listen_ip', (0, 25565))[1]}&"
         url += f"max={cfg('max_clients', 8)}&"
         url += f"name={parse.quote(cfg('name', 'Rutentoy'))}&"
-        url += f"public=False&"
+        url += f"public={parse.quote(str(bool(cfg('public', False))))}&"
         url += f"version=7&"
         url += f"salt={parse.quote(self.state.key)}&"
-        url += f"users={len(self.state.clients)}"
+        url += f"users={len(self.state.clients)}&"
+        url += f"software={parse.quote('Rutentiny 0.1.0')}&"
+        url += f"web=False"
+
+        # wait for the level to finish generating
+        sleep(15)
 
         while True:
-            try:
-                req = request.urlopen(url)
-                req.close()
-            except:
-                break
+            if not state.level.ready:
+                log("Was going to heartbeat, but level isn't ready")
+                continue
 
-            sleep(1)
+            log(f"Heartbeating to '{cfg('heartbeat_url')}'")
+
+            try:
+                stuff = request.urlopen(url, timeout=5).read().decode()
+
+                if len(stuff) > 0:
+                    log(f"Heartbeat: {stuff}")
+            except e:
+                log(f"Heartbeat: {e}")
+
+            sleep(60)
 
 
 if __name__ == "__main__":
