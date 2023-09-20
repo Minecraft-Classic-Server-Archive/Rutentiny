@@ -371,6 +371,10 @@ class Client:
                             self.recv(130))
                     self.name = name.strip().decode("ascii", "replace")
                     self.key = key.strip().decode("ascii", "replace")
+
+                    if ver != 7:
+                        self.kick(f"Only protocol 7 is supported, got {ver}")
+                        return
                 except:
                     self.kick("Corrupted login packet")
                     return
@@ -399,6 +403,11 @@ class Client:
                     self.server.cpe_handshake(self)
 
                 self.server.send_id(self)
+
+                if welcome := self.server.config.get("welcome_msg"):
+                    for msg in welcome:
+                        self.message(msg)
+
                 self.server.level.send_to_client(self)
                 self.server.add_client(self)
                 self.spawn(*self.server.level.get_spawnpoint())
@@ -589,10 +598,6 @@ class Client:
             if ("HeldBlock", 1) in self.cpe_exts:
                 # HoldThis
                 self.send(pack("BBB", 20, BlockID.NONE, 1))
-        else:
-            if ("HeldBlock", 1) in self.cpe_exts:
-                # HoldThis
-                self.send(pack("BBB", 20, BlockID.NONE, 0))
 
         # ClassiCube is really really picky has SetBlockPermission/oper mode
         # conflicts that make it really annoying to enable/disable all blocks
@@ -869,6 +874,10 @@ class Level:
             return (out * 2) - 1
 
     def tree(self, rx: int, ry: int, rz: int) -> None:
+        # dont generate half outside the level
+        if (rx, ry, rz) <= (0, 0, 0) or (rx, ry, rz) >= (self.xs - 1, self.ys - 1, self.zs - 1):
+            return
+
         from random import randrange
         height = randrange(4, 8)
 
@@ -889,6 +898,10 @@ class Level:
             self.set_block(rx, ry + y, rz, BlockID.LOG)
 
     def boulder(self, rx: int, ry: int, rz: int) -> None:
+        # dont generate half outside the level
+        if (rx, ry, rz) <= (0, 0, 0) or (rx, ry, rz) >= (self.xs - 1, self.ys - 1, self.zs - 1):
+            return
+
         from random import randrange, uniform
         radius = randrange(4, 16)
         xr = round(radius * uniform(0.8, 3.0))
@@ -1871,7 +1884,11 @@ class RequestHandler(socketserver.StreamRequestHandler):
         self.client: Client = Client(self.request, self.server.state)
 
         while not self.client.disconnected:
-            self.client.packet()
+            try:
+                self.client.packet()
+            except e:
+                self.client.kick(f"Error: {type(e)}")
+
         self.server.state.remove_client(self.client)
 
 
@@ -1902,7 +1919,7 @@ class HeartBeater:
         cfg = self.state.config.get
 
         url = cfg("heartbeat_url") + "?"
-        url += f"port={cfg('listen_ip', (0, 25565))[1]}&"
+        url += f"port={cfg('listen_ip', (None, 25565))[1]}&"
         url += f"max={cfg('max_clients', 8)}&"
         url += f"name={parse.quote(cfg('name', 'Rutentoy'))}&"
         url += f"public={parse.quote(str(bool(cfg('public', False))))}&"
