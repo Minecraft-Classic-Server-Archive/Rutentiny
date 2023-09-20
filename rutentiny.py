@@ -705,6 +705,7 @@ class Level:
         self.clouds: tuple[int, int]
         self.colors: list[tuple[int, int, int]]
         self.server: "ServerState" = server
+        self.last_modified: int = int(time.time())
 
         if size is None:
             self.xs, self.ys, self.zs = self.server.config.get("map_size",
@@ -733,6 +734,9 @@ class Level:
         if simplex_available:
             opensimplex.seed(self.seed)
 
+    def update_modtime(self) -> None:
+        self.last_modified = int(time.time())
+
     def save(self, path: str) -> None:
         log(f"saving map {path}")
         with gzip.open(path, "wb") as file:
@@ -743,8 +747,10 @@ class Level:
             # FIXME: sometimes this just breaks and corrupts the save
             try:
                 file.write(pack("!q", self.seed))
-            except:
+            except e:
+                log(f"saving: {e}")
                 file.write(pack("!q", 0))
+
             file.write(pack("!BBii", self.edge[0][0], self.edge[0][1],
                 self.edge[1][0], self.edge[1][1]))
             file.write(pack("!ii", self.clouds[0], self.clouds[1]))
@@ -836,6 +842,7 @@ class Level:
 
     def set_block(self, x: int, y: int, z: int, block: BlockID) -> None:
         self._set_block(x, y, z, block)
+        self.update_modtime()
 
         if self.ready:
             for cl in self.server.clients:
@@ -897,6 +904,8 @@ class Level:
         for y in range(0, height):
             self.set_block(rx, ry + y, rz, BlockID.LOG)
 
+        self.update_modtime()
+
     def boulder(self, rx: int, ry: int, rz: int) -> None:
         # dont generate half outside the level
         if (rx, ry, rz) <= (0, 0, 0) or (rx, ry, rz) >= (self.xs - 1, self.ys - 1, self.zs - 1):
@@ -917,6 +926,8 @@ class Level:
                 for y in range(-yr, yr):
                     if (((x**2)*xrs) + ((y**2)*yrs) + ((z**2)*zrs)) <= trs:
                         self.set_block(rx+x, ry+y, rz+z, BlockID.STONE)
+
+        self.update_modtime()
 
     def generate_hills(self):
         from random import randrange
@@ -978,6 +989,7 @@ class Level:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
+        self.update_modtime()
 
     def generate_islands(self):
         self.ready = False
@@ -1012,6 +1024,7 @@ class Level:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
+        self.update_modtime()
 
     def generate_hell(self):
         from random import randrange
@@ -1056,6 +1069,7 @@ class Level:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
+        self.update_modtime()
 
     def generate_moon(self):
         from random import randrange
@@ -1099,6 +1113,7 @@ class Level:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
+        self.update_modtime()
 
     def generate_flatgrass(self):
         self.ready = False
@@ -1121,6 +1136,7 @@ class Level:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
+        self.update_modtime()
 
     def generate_stone_checkers(self):
         self.ready = False
@@ -1141,6 +1157,7 @@ class Level:
                 log(f"{int((z / self.zs) * 100)}% generated")
         log("Map generation done")
         self.ready = True
+        self.update_modtime()
 
     def generate_void(self):
         self.ready = False
@@ -1153,6 +1170,7 @@ class Level:
         self.set_block(self.xs//2, self.ys//2-1, self.zs//2, BlockID.STONE)
         log("Map generation done")
         self.ready = True
+        self.update_modtime()
 
     def send_to_client(self, c: Client) -> None:
         fast = ("FastMap", 1) in c.cpe_exts
@@ -1275,6 +1293,7 @@ class ServerState:
         self.alive: bool = True
         self.key: str = ""
         self.max_clients: int = 8
+        self.next_autosave: int = 0
 
     def load_config(self, path: str) -> None:
         from ast import literal_eval
@@ -1486,6 +1505,22 @@ class ServerState:
                     col = self.level.colors[i]
                     c.send(pack("!BBhhh", 25, i, col[0], col[1], col[2]))
 
+    def do_autosave(self) -> None:
+        t = int(time.time())
+        i = self.autosave_interval
+
+        if self.level.last_modified + i >= t:
+            path = f"autosave-{t}.rtm"
+            self.level.save(self.config.get("map_path", ".") + "/" + path)
+
+            self.message(f"&eAutosaving... (every {i} minutes)")
+        else:
+            log(f"Would have autosaved, but no activity in the last {i} minutes")
+
+        timer = threading.Timer(self.autosave_interval, self.do_autosave)
+        timer.daemon = True
+        timer.start()
+
     def tick(self) -> None:
         for c in self.clients:
             # if a player crashed or lost connection, remove them
@@ -1554,10 +1589,7 @@ class ServerState:
                 pos.x - vel.x, pos.y - vel.y, pos.z - vel.z))
 
     def set_block(self, pos: Vec3, block: BlockID) -> None:
-        self.level._set_block(pos.x, pos.y, pos.z, block)
-
-        for c in self.clients:
-            c.send(pack("!BhhhB", 6, pos.x, pos.y, pos.z, block))
+        self.level.set_block(pos.x, pos.y, pos.z, block)
 
     def message(self, msg: str, type: int = 0) -> None:
         if type == 0:
@@ -1974,6 +2006,14 @@ if __name__ == "__main__":
         else:
             state.new_map(state.config.get("map_generator", "flatgrass"),
                     state.config.get("map_size", (128, 128, 128)))
+
+        if (ivl := state.config.get("autosave_interval", 0)) != 0:
+            state.autosave_interval = ivl * 60
+
+            # wait a bit so we dont immediately autosave on startup
+            timer = threading.Timer(state.autosave_interval, state.do_autosave)
+            timer.daemon = True
+            timer.start()
 
         state.tick()
 
