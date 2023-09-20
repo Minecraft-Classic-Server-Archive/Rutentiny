@@ -598,8 +598,13 @@ class Client:
             if ("HeldBlock", 1) in self.cpe_exts:
                 # HoldThis
                 self.send(pack("BBB", 20, BlockID.NONE, 1))
+        else:
+            # this has to be here or the held block will be permanently locked
+            if ("HeldBlock", 1) in self.cpe_exts:
+                # HoldThis
+                self.send(pack("BBB", 20, BlockID.NONE, 0))
 
-        # ClassiCube is really really picky has SetBlockPermission/oper mode
+        # ClassiCube is really really picky and has SetBlockPermission/oper mode
         # conflicts that make it really annoying to enable/disable all blocks
         if ("InstantMOTD", 1) in self.cpe_exts:
             self.send(pack("BB64s64sB", 0, 7,
@@ -747,7 +752,7 @@ class Level:
             # FIXME: sometimes this just breaks and corrupts the save
             try:
                 file.write(pack("!q", self.seed))
-            except e:
+            except Exception as e:
                 log(f"saving: {e}")
                 file.write(pack("!q", 0))
 
@@ -1918,7 +1923,7 @@ class RequestHandler(socketserver.StreamRequestHandler):
         while not self.client.disconnected:
             try:
                 self.client.packet()
-            except e:
+            except Exception as e:
                 self.client.kick(f"Error: {type(e)}")
 
         self.server.state.remove_client(self.client)
@@ -1976,7 +1981,7 @@ class HeartBeater:
 
                 if len(stuff) > 0:
                     log(f"Heartbeat: {stuff}")
-            except e:
+            except Exception as e:
                 log(f"Heartbeat: {e}")
 
             sleep(60)
