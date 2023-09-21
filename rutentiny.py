@@ -1676,7 +1676,11 @@ class ServerState:
 
         if msg.startswith("/me "):
             self.message(f"{c.name} {msg[4:]}")
-        elif msg.startswith("/gamemode ") \
+            return
+
+        log(f"{c.name} used command '{msg}'")
+
+        if msg.startswith("/gamemode ") \
                 and (c.oper or self.level.gamemode == "creative"):
             c.set_gamemode(msg[10:].strip())
             c.message(f"&eYour gamemode is set to {msg[10:].strip()}")
@@ -1968,21 +1972,25 @@ class HeartBeater:
 
         # wait for the level to finish generating
         sleep(15)
+        log(f"Heartbeating (1/min) to '{cfg('heartbeat_url')}'")
+
+        last_heartbeat_response = None
 
         while True:
             if not state.level.ready:
                 log("Was going to heartbeat, but level isn't ready")
                 continue
 
-            log(f"Heartbeating to '{cfg('heartbeat_url')}'")
-
             try:
-                stuff = request.urlopen(url, timeout=5).read().decode()
+                resp = request.urlopen(url, timeout=5).read().decode()
 
+                # don't spam the log with the same url the heartbeat server gives us
                 if len(stuff) > 0:
-                    log(f"Heartbeat: {stuff}")
+                    if resp != last_heartbeat_response:
+                        last_heartbeat_response = resp
+                        log(f"Heartbeat: {resp}")
             except Exception as e:
-                log(f"Heartbeat: {e}")
+                log(f"Heartbeat error: {e}")
 
             sleep(60)
 
