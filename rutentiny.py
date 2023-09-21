@@ -753,7 +753,7 @@ class Level:
             try:
                 file.write(pack("!q", self.seed))
             except Exception as e:
-                log(f"saving: {e}")
+                log(f"saving: (self.seed = {self.seed}) {e}")
                 file.write(pack("!q", 0))
 
             file.write(pack("!BBii", self.edge[0][0], self.edge[0][1],
