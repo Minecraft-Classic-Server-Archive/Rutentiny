@@ -1966,13 +1966,12 @@ class HeartBeater:
         url += f"public={parse.quote(str(bool(cfg('public', False))))}&"
         url += f"version=7&"
         url += f"salt={parse.quote(self.state.key)}&"
-        url += f"users={len(self.state.clients)}&"
         url += f"software={parse.quote('Rutentiny 0.1.0')}&"
         url += f"web=False"
 
         # wait for the level to finish generating
         sleep(15)
-        log(f"Heartbeating (1/min) to '{cfg('heartbeat_url')}'")
+        log(f"Heartbeating (1/min) to {cfg('heartbeat_url')}")
 
         last_heartbeat_response = None
 
@@ -1982,10 +1981,11 @@ class HeartBeater:
                 continue
 
             try:
-                resp = request.urlopen(url, timeout=5).read().decode()
+                turl = f"{url}&users={len(self.state.clients)}"
+                resp = request.urlopen(turl, timeout=5).read().decode()
 
                 # don't spam the log with the same url the heartbeat server gives us
-                if len(stuff) > 0:
+                if len(resp) > 0:
                     if resp != last_heartbeat_response:
                         last_heartbeat_response = resp
                         log(f"Heartbeat: {resp}")
