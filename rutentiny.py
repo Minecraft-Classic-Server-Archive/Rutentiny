@@ -797,7 +797,7 @@ class Level:
                 self.map = bytearray(file.read(self.xs * self.ys * self.zs))
 
                 try:
-                    self.seed = unpack("!q", file.read(8))
+                    self.seed, = unpack("!q", file.read(8))
                 except:
                     self.seed = 0
                 self.edge = (unpack("BB", file.read(2)),
@@ -862,28 +862,30 @@ class Level:
 
     def noise(self, x: float, y: float) -> float:
         if simplex_available:
-            t = opensimplex.noise2(x + 34.332, y + 4.444) * 1.0
-            #t += opensimplex.noise2((x * 2) + 43.112, (y * 2) + 3.143) * 0.1
-            t += opensimplex.noise2((x * 5) + 0.145, (y * 5) + 88.432) * 0.1
-            return t
+            return opensimplex.noise2(x, y)
         else:
-            # TODO: make a cc0 noise function that isnt trashgarbage
-            # terrible awful fallback noise
             from random import random, seed
             from math import trunc
 
-            def lerp(a, b, t):
+            def lerp(a: float, b: float, t: float) -> float:
                 return a + (b - a) * t
 
-            t = (x - trunc(x)) ** 2
+            def subhash(n: int) -> float:
+                seed(n)
+                return random()
 
-            seed(int(x + self.seed))
-            a = random()
-            seed(int(x + 1) + self.seed)
-            b = random()
+            def fhash(n: float) -> float:
+                t = (n - trunc(n)) ** 2
+                a = subhash(int(n + self.seed))
+                b = subhash(int(n + 1) + self.seed)
+                return lerp(a, b, t)
 
-            out = lerp(a, b, t)
-            return (out * 2) - 1
+            # for some reason it needs to be 3x to
+            # be the same scale as the opensimplex?
+            nx = fhash(x * 3)
+            ny = fhash(-(y * 3) + 4335)
+
+            return (nx + ny) - 1
 
     def tree(self, rx: int, ry: int, rz: int) -> None:
         # dont generate half outside the level
@@ -987,8 +989,15 @@ class Level:
                             self.tree(x, height, z)
 
                     if n < -0.3:
-                        if randrange(0, 1024) == 0:
+                        if randrange(0, 768) == 0:
                             self.boulder(x, height + randrange(-4, 0), z)
+
+                    if n > -0.1 and n < 0.1:
+                        if randrange(0, 32) == 0:
+                            if randrange(0, 1) == 0:
+                                self.set_block(x, height, z, BlockID.DANDELION)
+                            else:
+                                self.set_block(x, height, z, BlockID.ROSE)
 
             if z % 32 == 0:
                 log(f"{int((z / self.zs) * 100)}% generated")
@@ -1192,7 +1201,7 @@ class Level:
                 b"Acid",        # name
                 5,              # collision mode
                 96,             # speed modifier
-                46, 46, 46,     # top, side, bottom textures
+                67, 67, 67,     # top, side, bottom textures
                 0,              # translucent
                 0,              # walk noise
                 1,              # fullbright
@@ -1208,7 +1217,7 @@ class Level:
                 b"Tar",         # name
                 6,              # collision mode
                 15,             # speed modifier
-                63, 63, 63,     # top, side, bottom textures
+                37, 37, 37,     # top, side, bottom textures
                 0,              # translucent
                 0,              # walk noise
                 0,              # fullbright
@@ -1518,7 +1527,7 @@ class ServerState:
             path = f"autosave-{t}.rtm"
             self.level.save(self.config.get("map_path", ".") + "/" + path)
 
-            self.message(f"&eAutosaving... (every {i} minutes)")
+            self.message(f"&eAutosaving... (every {i / 60} minutes)")
         else:
             log(f"Would have autosaved, but no activity in the last {i} minutes")
 
