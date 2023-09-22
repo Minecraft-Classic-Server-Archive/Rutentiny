@@ -1630,7 +1630,7 @@ class ServerState:
                 if len(args) < 2: return
                 self.message(" ".join(args[1:]))
 
-            case "stop":
+            case "stop" | "quit" | "exit":
                 if len(args) < 2:
                     self.shutdown("Server shutting down")
                 else:
@@ -1689,12 +1689,27 @@ class ServerState:
 
         log(f"{c.name} used command '{msg}'")
 
-        if msg.startswith("/gamemode ") \
+        args = msg.split()
+
+        if msg == "/help":
+            c.message("&e/gamemode mode &c(oper or creative)")
+            c.message("&e/load name: Load level &c(oper)")
+            c.message("&e/save name: Save level &c(oper)")
+            c.message("&e/new kind x y z: Generate new level &c(oper)")
+            c.message("&e- flatgrass, stone_checkers, islands, hills, hell, moon, void")
+            c.message("&e/tp x y z &c(oper or creative)")
+            c.message("&e/tree: Generate a tree &c(creative)")
+            c.message("&e/lp property: Set a level property &c(oper or creative)")
+            c.message("&e/fill: Fill an area &c(oper)")
+            c.message("&e/spawn: Spawn an entity &f(BROKEN) &c(oper)")
+            c.message("&e/model kind: Set player model &c(oper or creative)")
+
+        elif args[0] == "/gamemode" \
                 and (c.oper or self.level.gamemode == "creative"):
-            c.set_gamemode(msg[10:].strip())
-            c.message(f"&eYour gamemode is set to {msg[10:].strip()}")
-        elif msg.startswith("/load ") and c.oper:
-            path = msg[6:].strip() + ".rtm"
+            c.set_gamemode(args[1])
+            c.message(f"&eYour gamemode is set to {args[1]}")
+        elif args[0] == "/load" and c.oper:
+            path = args[1] + ".rtm"
 
             if "./" in path:
                 c.message(f"&cInvalid path")
@@ -1705,8 +1720,8 @@ class ServerState:
                 self.message(f"Loaded {path}")
             except Exception as e:
                 c.message(f"&cFailed to load {path}: {e!r}")
-        elif msg.startswith("/save ") and c.oper:
-            path = msg[6:].strip() + ".rtm"
+        elif args[0] == "/save" and c.oper:
+            path = args[1] + ".rtm"
 
             if "./" in path:
                 c.message(f"&cInvalid path")
@@ -1717,8 +1732,8 @@ class ServerState:
                 self.message(f"Saved as {path}")
             except Exception as e:
                 self.message(f"Failed to save {path}: {e!r}")
-        elif msg.startswith("/new ") and c.oper:
-            args = msg[5:].split(" ")
+        elif args[0] == "/new" and c.oper:
+            args = args[1:]
             if len(args) < 4:
                 c.message("&cUsage: /new generator xsize ysize zsize")
                 return
@@ -1733,20 +1748,20 @@ class ServerState:
             self.new_map(args[0],
                     Vec3(int(args[1]), int(args[2]), int(args[3])))
             self.message(f"Done generating {args[0]} map")
-        elif msg.startswith("/tp ") and (c.gamemode == 1 or c.oper):
-            args = msg[4:].split(" ")
+        elif args[0] == "/tp" and (c.gamemode == 1 or c.oper):
+            args = args[1:]
 
             try:
                 c.teleport(Vec3(int(args[0]), int(args[1]), int(args[2])),
                         c.angle)
             except:
                 c.message("&cUsage: /tp x y z")
-        elif msg.startswith("/tree") and c.gamemode == 1:
+        elif args[0] == "/tree" and c.gamemode == 1:
             self.level.tree(*c.pos.to_block())
-        elif msg.startswith("/model ") and (c.gamemode == 1 or c.oper):
-            self.set_playermodel(c, msg[7:])
-        elif msg.startswith("/lp ") and (c.gamemode == 1 or c.oper):
-            args = msg[4:].split()
+        elif args[0] == "/model" and (c.gamemode == 1 or c.oper):
+            self.set_playermodel(c, args[1])
+        elif args[0] == "/lp" and (c.gamemode == 1 or c.oper):
+            args = args[1:]
 
             if len(args) < 1:
                 c.message("&eAvailable properties:")
@@ -1893,8 +1908,8 @@ class ServerState:
                     return
 
             self.update_env_properties()
-        elif msg.startswith("/fill ") and c.oper:
-            args = msg[6:].split()
+        elif args[0] == "/fill" and c.oper:
+            args = args[1:]
 
             if len(args) < 7:
                 c.message("&cUsage: /fill block-id x1 y1 z1 x2 y2 z2")
@@ -1916,17 +1931,16 @@ class ServerState:
                 for x in range(x1, x2):
                     for z in range(z1, z2):
                         self.set_block(Vec3(x, y, z), block)
-        elif msg.startswith("/spawn ") and c.oper:
+        elif args[0] == "/spawn" and c.oper:
             c.message("&cNPCs are unfinished and will break your server!")
-            model = msg[7:]
-            model, _, name = model.partition(" ")
+            model = args[1]
+            name = args[2] if len(args) > 2 else ""
             if model:
-                self.add_npc(NPCEntity(self, model), name or "",
-                        c.pos, c.angle)
+                self.add_npc(NPCEntity(self, model), name, c.pos, c.angle)
             else:
                 c.message("&cUsage: /spawn type [name]")
         else:
-            c.message("&cUnknown or disallowed command")
+            c.message(f"&cUnknown or disallowed command {args[0]}")
 
 
 class RequestHandler(socketserver.StreamRequestHandler):
