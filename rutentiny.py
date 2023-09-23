@@ -256,6 +256,7 @@ class Client:
         self.deaths: int = 0
         #self.locale: str = "en-US"     # TODO: is this useful for anything?
         self.encoding: str = "ascii"
+        self.connect_time: int = 0
 
     def recv(self, size: int) -> bytes:
         try:
@@ -394,9 +395,16 @@ class Client:
                     self.kick("Banned")
                     return
 
-                if len(self.server.clients) >= self.server.max_clients:
+                # always allow an oper to connect if possible
+                if (c.name in self.config.get("opers", []) and len(self.server.clients) < 128) \
+                        or len(self.server.clients) >= self.server.max_clients:
                     self.kick("Server is full")
                     return
+
+                for c in self.server.clients:
+                    if c.name == name:
+                        self.kick(f"Username '{name}' is taken")
+                        return
 
                 if self.server.config.get("heartbeat_url", None):
                     from hashlib import md5
@@ -423,6 +431,7 @@ class Client:
                 self.server.add_client(self)
                 self.spawn(*self.server.level.get_spawnpoint())
                 self.set_gamemode(self.server.level.gamemode)
+                self.connect_time = time.time()
 
                 # we can dream
                 if ("UTF-8", 1) in self.cpe_exts:
@@ -1550,9 +1559,9 @@ class ServerState:
             path = f"autosave-{t}.rtm"
             self.level.save(self.config.get("map_path", ".") + "/" + path)
 
-            self.message(f"&eAutosaving... (every {i / 60} minutes)")
+            self.message(f"&eAutosaving... (every {int(i // 60)} minutes)")
         else:
-            log(f"Would have autosaved, but no activity in the last {i} minutes")
+            log(f"Would have autosaved, but no activity in the last {int(i // 60)} minutes")
 
         timer = threading.Timer(self.autosave_interval, self.do_autosave)
         timer.daemon = True
@@ -1732,6 +1741,11 @@ class ServerState:
             c.message("&e/fill: Fill an area &c(oper)")
             #c.message("&e/spawn: Spawn an entity &f(BROKEN) &c(oper)")
             #c.message("&e/model kind: Set player model &c(oper or creative)")
+            c.message("&e/clients: List connected players")
+        elif args[0] == "/clients":
+            c.message("&eConnected players:")
+            for c in self.clients:
+                c.message(f"- {c.name} ({int((time.time() - c.connect_time) // 60)} minutes)")
         elif args[0] == "/gamemode" and (oper or creative):
             if len(args) < 2:
                 c.message(f"&eUsage: /gamemode (mode)")
@@ -1982,6 +1996,10 @@ class ServerState:
             if block < 0 or block >= BlockID.MAXIMUM:
                 c.message(f"&cInvalid block ID {block}")
                 return
+
+            if x2 < x1: x1, x2 = x2, x1
+            if y2 < y1: y1, y2 = y2, y1
+            if z2 < z1: z1, z2 = z2, z1
 
             for y in range(y1, y2):
                 for x in range(x1, x2):
