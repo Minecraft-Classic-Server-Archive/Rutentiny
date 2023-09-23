@@ -66,10 +66,11 @@ def clamp(v: float, a: float, b: float) -> float:
     return max(min(v, b), a)
 
 
-class Vec3(NamedTuple):
-    x: int
-    y: int
-    z: int
+class Vec3:
+    def __init__(self, x: int, y: int, z: int) -> None:
+        self.x: int = x
+        self.y: int = y
+        self.z: int = z
 
     def __str__(self) -> str:
         return f"{self.x, self.y, self.z}"
@@ -83,16 +84,17 @@ class Vec3(NamedTuple):
     def to_block(self) -> "Vec3":
         return Vec3(self.x // 32, (self.y - 51) // 32, self.z // 32)
 
-    def to_fixed(self, ext: bool = False) -> "Vec3":
+    @staticmethod
+    def to_fixed(x: float, y: float, z: float, ext: bool = False) -> "Vec3":
         if ext:
             limit = 2**31
         else:
             limit = 2**15
 
         return Vec3(
-                int(clamp(self.x * 32, -limit, limit - 1)),
-                int(clamp((self.y * 32) + 51, -limit, limit - 1)),
-                int(clamp(self.z * 32, -limit, limit - 1)))
+                int(clamp(x * 32, -limit, limit - 1)),
+                int(clamp((y * 32) + 51, -limit, limit - 1)),
+                int(clamp(z * 32, -limit, limit - 1)))
 
     def dist_to(self, other: "Vec3") -> float:
         from math import sqrt
@@ -217,7 +219,7 @@ class Client:
     Represents the player state of a connected client.
     """
 
-    def __init__(self, socket, server: "ServerState"):
+    def __init__(self, socket, server: "ServerState") -> None:
         from collections import deque
 
         self.socket = socket
@@ -300,7 +302,7 @@ class Client:
             elif self.gamemode == 4:
                 self.score_update()
 
-        x, y, z = self.pos
+        x, y, z = self.pos.x, self.pos.y, self.pos.z
         feet_block = self.server.level.get_block(x//32, (y-52)//32, z//32)
 
         if feet_block == BlockID.JUMP_PAD \
@@ -467,7 +469,11 @@ class Client:
                             "replace")
                     msg = re.sub(r'%([0-9a-f])', r'&\1', msg)
                     self.msg_buffer = bytearray()
-                    self.server.handle_message(self, msg)
+
+                    try:
+                        self.server.handle_message(self, msg)
+                    except Exception as e:
+                        self.message(f"&cCommand error ({e.__class__.__name__})")
 
             # click
             case 34:
@@ -624,7 +630,7 @@ class Client:
     def teleport(self, pos: Vec3, angle: Vec2) -> None:
         self.pos = pos
         self.angle = angle
-        fpos = Vec3(pos.x + .5, pos.y, pos.z + .5).to_fixed()
+        fpos = Vec3.to_fixed(pos.x + .5, pos.y, pos.z + .5)
 
         if ("ExtEntityPositions", 1) in self.cpe_exts:
             strucdef = "!BBiiiBB"
@@ -662,7 +668,7 @@ class Client:
 
 
 class NPCEntity(Client):
-    def __init__(self, server: "ServerState", model: str):
+    def __init__(self, server: "ServerState", model: str) -> None:
         super().__init__(None, server)
         self.model = model
         self.name = ""
@@ -701,7 +707,7 @@ class Level:
     Stores block data and provides functions for disk and network IO.
     """
 
-    def __init__(self, server: "ServerState", size: Optional[Vec3] = None):
+    def __init__(self, server: "ServerState", size: Optional[Vec3] = None) -> None:
         self.xs: int
         self.ys: int
         self.zs: int
@@ -716,10 +722,10 @@ class Level:
             self.xs, self.ys, self.zs = self.server.config.get("map_size",
                     (128, 128, 128))
         else:
-            self.xs, self.ys, self.zs = size
+            self.xs, self.ys, self.zs = size.x, size.y, size.z
 
         self.spawn_points: list[tuple[Vec3, Vec2]] = [
-                (Vec3(self.xs/2, self.ys+1, self.zs/2).to_fixed(), Vec2(0, 0)),
+                (Vec3.to_fixed(self.xs/2, self.ys+1, self.zs/2), Vec2(0, 0)),
                 ]
         self.gamemode = "creative"
         self.name = "Unnamed"
@@ -780,14 +786,18 @@ class Level:
 
             # old map format
             if magic == b"rtm\x00":
-                self.xs, self.ys, self.zs, self.seed = unpack("!iiiq",
-                        file.read(calcsize("!iiiq")))
-                self.edge = (unpack("BB", file.read(2)),
-                        (unpack("!ii", file.read(calcsize("!ii")))))
-                self.clouds = unpack("!ii", file.read(calcsize("!ii")))
+                self.xs, self.ys, self.zs, self.seed = typing.cast(
+                    tuple[int, int, int, int],
+                    unpack("!iiiq", file.read(calcsize("!iiiq"))))
+                self.edge = typing.cast(tuple[tuple[BlockID, BlockID], tuple[int, int]],
+                                        (unpack("BB", file.read(2)),
+                                         unpack("!ii", file.read(calcsize("!ii")))))
+                self.clouds = typing.cast(tuple[int, int],
+                                          unpack("!ii", file.read(calcsize("!ii"))))
 
                 for i in range(0, 6):
-                    self.colors.append(unpack("!BBB", file.read(3)))
+                    self.colors[i] = typing.cast(tuple[int, int, int],
+                                                 unpack("!BBB", file.read(3)))
 
                 self.map = bytearray(file.read(self.xs * self.ys * self.zs))
             elif magic == b"rtm\x01":
@@ -796,17 +806,19 @@ class Level:
                 self.xs, self.ys, self.zs = unpack("!iii", file.read(12))
                 self.map = bytearray(file.read(self.xs * self.ys * self.zs))
 
-                try:
-                    self.seed, = unpack("!q", file.read(8))
-                except:
-                    self.seed = 0
-                self.edge = (unpack("BB", file.read(2)),
-                        unpack("!ii", file.read(8)))
-                self.clouds = unpack("!ii", file.read(8))
+                # unfortunately some maps have had their seed corrupted
+                # by me forgetting unpack returns a tuple
+                self.seed, = unpack("!q", file.read(8))
+                self.edge = typing.cast(tuple[tuple[BlockID, BlockID], tuple[int, int]],
+                                        (unpack("BB", file.read(2)),
+                                         unpack("!ii", file.read(calcsize("!ii")))))
+                self.clouds = typing.cast(tuple[int, int],
+                                          unpack("!ii", file.read(8)))
 
                 self.colors.clear()
                 for i in range(0, 6):
-                    self.colors.append(unpack("!BBB", file.read(3)))
+                    self.colors[i] = typing.cast(tuple[int, int, int],
+                                                 unpack("!BBB", file.read(3)))
 
                 spawnpoint_count, = unpack("!i", file.read(4))
 
@@ -830,7 +842,7 @@ class Level:
         from random import choice
 
         if len(self.spawn_points) < 1:
-            return (Vec3(self.xs//2, self.ys+1, self.zs//2).to_fixed(),
+            return (Vec3.to_fixed(self.xs//2, self.ys+1, self.zs//2),
                     Vec2(0, 0))
         else:
             return choice(self.spawn_points)
@@ -1300,14 +1312,15 @@ class Level:
 
 
 class ServerState:
-    def __init__(self):
-        self.level: Level = None
+    def __init__(self) -> None:
+        # empty level hack to avoid Level | None mypy shenanigans
+        self.level: Level = Level(self, Vec3(2, 2, 2))
         self.clients: list[Client] = []
         self.config: dict = {}
         self.alive: bool = True
         self.key: str = ""
         self.max_clients: int = 8
-        self.next_autosave: int = 0
+        self.autosave_interval: int = 0
 
     def load_config(self, path: str) -> None:
         from ast import literal_eval
@@ -1540,9 +1553,11 @@ class ServerState:
             # if a player crashed or lost connection, remove them
             if c.disconnected:
                 self.remove_client(c)
+                continue
 
             if c.pos != c.old_pos or c.angle != c.old_angle:
                 self.player_move(c)
+
             c.tick()
 
         timer = threading.Timer(1 / 20, self.tick)
@@ -1691,8 +1706,11 @@ class ServerState:
 
         args = msg.split()
 
+        oper: bool = c.oper
+        creative: bool = self.level.gamemode == "creative"
+
         if msg == "/help":
-            c.message("&e/gamemode mode &c(oper or creative)")
+            #c.message("&e/gamemode mode &c(oper or creative)")
             c.message("&e/load name: Load level &c(oper)")
             c.message("&e/save name: Save level &c(oper)")
             c.message("&e/new kind x y z: Generate new level &c(oper)")
@@ -1701,14 +1719,26 @@ class ServerState:
             c.message("&e/tree: Generate a tree &c(creative)")
             c.message("&e/lp property: Set a level property &c(oper or creative)")
             c.message("&e/fill: Fill an area &c(oper)")
-            c.message("&e/spawn: Spawn an entity &f(BROKEN) &c(oper)")
-            c.message("&e/model kind: Set player model &c(oper or creative)")
+            #c.message("&e/spawn: Spawn an entity &f(BROKEN) &c(oper)")
+            #c.message("&e/model kind: Set player model &c(oper or creative)")
+        elif args[0] == "/gamemode" and (oper or creative):
+            if len(args) < 2:
+                c.message(f"&eUsage: /gamemode (mode)")
+                return
 
-        elif args[0] == "/gamemode" \
-                and (c.oper or self.level.gamemode == "creative"):
+            if args[1] != "survival" \
+                    and args[1] != "creative" \
+                    and args[1] != "expore" \
+                    and args[1] != "instagib":
+                c.message(f"&fUnknown gamemode {args[1]}")
+
             c.set_gamemode(args[1])
             c.message(f"&eYour gamemode is set to {args[1]}")
-        elif args[0] == "/load" and c.oper:
+        elif args[0] == "/load" and oper:
+            if len(args) < 2:
+                c.message("&eUsage: /load (name)")
+                return
+
             path = args[1] + ".rtm"
 
             if "./" in path:
@@ -1720,7 +1750,11 @@ class ServerState:
                 self.message(f"Loaded {path}")
             except Exception as e:
                 c.message(f"&cFailed to load {path}: {e!r}")
-        elif args[0] == "/save" and c.oper:
+        elif args[0] == "/save" and oper:
+            if len(args) < 2:
+                c.message("&eUsage: /save (name)")
+                return
+
             path = args[1] + ".rtm"
 
             if "./" in path:
@@ -1732,15 +1766,14 @@ class ServerState:
                 self.message(f"Saved as {path}")
             except Exception as e:
                 self.message(f"Failed to save {path}: {e!r}")
-        elif args[0] == "/new" and c.oper:
-            args = args[1:]
-            if len(args) < 4:
+        elif args[0] == "/new" and oper:
+            if len(args) < 5:
                 c.message("&cUsage: /new generator xsize ysize zsize")
                 return
 
-            if (int(args[1]) > 1024
-                    or int(args[2]) > 1024
-                    or int(args[3]) > 1024):
+            args = args[1:]
+
+            if int(args[1]) > 1024 or int(args[2]) > 1024 or int(args[3]) > 1024:
                 c.message("&cMap extents cannot exceed 1024 in any direction")
                 return
 
@@ -1748,27 +1781,35 @@ class ServerState:
             self.new_map(args[0],
                     Vec3(int(args[1]), int(args[2]), int(args[3])))
             self.message(f"Done generating {args[0]} map")
-        elif args[0] == "/tp" and (c.gamemode == 1 or c.oper):
+        elif args[0] == "/tp" and (oper or creative):
+            if len(args) < 4:
+                c.message("&cUsage: /tp x y z")
+                return
+
             args = args[1:]
 
             try:
-                c.teleport(Vec3(int(args[0]), int(args[1]), int(args[2])),
-                        c.angle)
+                c.teleport(Vec3(int(args[0]), int(args[1]), int(args[2])), c.angle)
             except:
                 c.message("&cUsage: /tp x y z")
-        elif args[0] == "/tree" and c.gamemode == 1:
-            self.level.tree(*c.pos.to_block())
-        elif args[0] == "/model" and (c.gamemode == 1 or c.oper):
-            self.set_playermodel(c, args[1])
-        elif args[0] == "/lp" and (c.gamemode == 1 or c.oper):
-            args = args[1:]
+        elif args[0] == "/tree" and creative:
+            p = c.pos.to_block()
+            self.level.tree(p.x, p.y, p.z)
+        elif args[0] == "/model" and (oper or creative):
+            if len(args) < 2:
+                c.message("&cUsage: /model (model)")
+                return
 
-            if len(args) < 1:
+            self.set_playermodel(c, args[1])
+        elif args[0] == "/lp" and (oper or creative):
+            if len(args) < 2:
                 c.message("&eAvailable properties:")
                 c.message("&e  name, gamemode, spawns,")
                 c.message("&e  clouds, edge, sky-color, fog-color,")
                 c.message("&e  cloud-color, diffuse-light, ambient-light")
                 return
+
+            args = args[1:]
 
             match args[0]:
                 case "spawns":
@@ -1815,7 +1856,7 @@ class ServerState:
                         c.message(f"  &ctop id, side id, height, side height")
                         return
 
-                    self.level.edge = ((top_id, side_id), (height, top_diff))
+                    self.level.edge = ((BlockID(top_id), BlockID(side_id)), (height, top_diff))
 
                 case "sky-color":
                     try:
@@ -1908,12 +1949,12 @@ class ServerState:
                     return
 
             self.update_env_properties()
-        elif args[0] == "/fill" and c.oper:
-            args = args[1:]
-
-            if len(args) < 7:
+        elif args[0] == "/fill" and oper:
+            if len(args) < 8:
                 c.message("&cUsage: /fill block-id x1 y1 z1 x2 y2 z2")
                 return
+
+            args = args[1:]
 
             try:
                 block = int(args[0])
@@ -1927,13 +1968,17 @@ class ServerState:
                 c.message("&cUsage: /fill block-id x1 y1 z1 x2 y2 z2")
                 return
 
+            if block < 0 or block >= BlockID.MAXIMUM:
+                c.message(f"&cInvalid block ID {block}")
+                return
+
             for y in range(y1, y2):
                 for x in range(x1, x2):
                     for z in range(z1, z2):
-                        self.set_block(Vec3(x, y, z), block)
-        elif args[0] == "/spawn" and c.oper:
+                        self.set_block(Vec3(x, y, z), BlockID(block))
+        elif args[0] == "/spawn" and oper:
             c.message("&cNPCs are unfinished and will break your server!")
-            model = args[1]
+            model = args[1] if len(args) > 1 else None
             name = args[2] if len(args) > 2 else ""
             if model:
                 self.add_npc(NPCEntity(self, model), name, c.pos, c.angle)
@@ -1944,21 +1989,20 @@ class ServerState:
 
 
 class RequestHandler(socketserver.StreamRequestHandler):
-    def handle(self):
-        self.client: Client = Client(self.request, self.server.state)
+    def handle(self) -> None:
+        server: ThreadedServer = typing.cast(ThreadedServer, self.server)
+        client: Client = Client(self.request, server.state)
 
-        while not self.client.disconnected:
+        while not client.disconnected:
             try:
-                self.client.packet()
+                client.packet()
             except Exception as e:
-                self.client.kick(f"Error: {type(e)}")
-
-        self.server.state.remove_client(self.client)
+                client.kick(f"Unhandled error: {e.__class__.__name__}")
 
 
 class ThreadedServer(socketserver.ThreadingTCPServer):
     def __init__(self, address: tuple[str, int],
-            request_handler: typing.Any, state: ServerState):
+            request_handler: typing.Any, state: ServerState) -> None:
         from ipaddress import ip_address, IPv6Address
 
         if len(address[0]) > 0 \
@@ -1968,12 +2012,12 @@ class ThreadedServer(socketserver.ThreadingTCPServer):
                 self.address_family = socket.AF_INET6
 
         self.state: ServerState = state
-        self.allow_reuse_address = True
+        self.allow_reuse_address: bool = True
         super().__init__(address, request_handler)
 
 
 class HeartBeater:
-    def __init__(self, state: ServerState):
+    def __init__(self, state: ServerState) -> None:
         self.state = state
 
     def start_beating(self):
@@ -2041,7 +2085,7 @@ if __name__ == "__main__":
                     state.config.get("map_path", ".") + "/" + map + ".rtm")
         else:
             state.new_map(state.config.get("map_generator", "flatgrass"),
-                    state.config.get("map_size", (128, 128, 128)))
+                    Vec3(*state.config.get("map_size", (128, 128, 128))))
 
         if (ivl := state.config.get("autosave_interval", 0)) != 0:
             state.autosave_interval = ivl * 60
