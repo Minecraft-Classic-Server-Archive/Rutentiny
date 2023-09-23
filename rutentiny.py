@@ -396,7 +396,8 @@ class Client:
                     return
 
                 # always allow an oper to connect if possible
-                if (c.name in self.config.get("opers", []) and len(self.server.clients) < 128) \
+                if (name in self.server.config.get("opers", []) \
+                        and len(self.server.clients) < 128) \
                         or len(self.server.clients) >= self.server.max_clients:
                     self.kick("Server is full")
                     return
@@ -2027,6 +2028,7 @@ class RequestHandler(socketserver.StreamRequestHandler):
                 client.packet()
             except Exception as e:
                 client.kick(f"Unhandled error: {e.__class__.__name__}")
+                log(e)
 
 
 class ThreadedServer(socketserver.ThreadingTCPServer):
