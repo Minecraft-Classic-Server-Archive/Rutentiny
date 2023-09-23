@@ -55,11 +55,20 @@ def pad_data(data: bytes) -> bytes:
 def chunk_iter(data: bytes) -> Iterator[bytes]:
     return (data[pos:pos + 1024] for pos in range(0, len(data), 1024))
 
+try:
+    import os
+    os.makedirs("logs", exist_ok=True)
+    log_file = open(f"logs/{time.strftime('%Y-%m-%d')}.log", "a")
+except:
+    log_file = None
 
 color_remove_re = re.compile(r'&[0-9a-f]')
 def log(msg: str) -> None:
     msg = color_remove_re.sub(r'', msg)
-    print(f"[{time.strftime('%H:%M:%S')}] " + msg)
+    msg= f"[{time.strftime('%H:%M:%S')}] {msg}\n"
+    print(msg, end="")
+    if log_file is not None:
+        log_file.write(msg)
 
 
 def clamp(v: float, a: float, b: float) -> float:
@@ -1429,6 +1438,7 @@ class ServerState:
 
         self.clients = []
         self.alive = False
+        log_file.close()
 
     def send_id(self, c: Client) -> None:
         if c.name in self.config.get("opers", []):
@@ -2104,5 +2114,3 @@ if __name__ == "__main__":
             state.shutdown("Server shutting down")
         except:
             state.shutdown("Possible server crash")
-
-        server.shutdown()
