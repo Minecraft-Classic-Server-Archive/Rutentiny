@@ -407,7 +407,7 @@ class Client:
                 if self.name in self.server.config.get("opers", []):
                     maxc = 128
 
-                if len(self.server.clients) >= self.server.max_clients:
+                if len(self.server.clients) >= maxc:
                     self.kick("Server is full")
                     log(f"{self.name} tried to connect (server full)")
                     return
