@@ -393,18 +393,21 @@ class Client:
 
                 if self.name in self.server.config.get("banned", []):
                     self.kick("Banned")
+                    log(f"{self.name} tried to connect, banned")
                     return
 
                 # always allow an oper to connect if possible
-                if (name in self.server.config.get("opers", []) \
+                if (self.name in self.server.config.get("opers", []) \
                         and len(self.server.clients) < 128) \
                         or len(self.server.clients) >= self.server.max_clients:
                     self.kick("Server is full")
+                    log(f"{self.name} tried to connect, server full")
                     return
 
                 for c in self.server.clients:
-                    if c.name == name:
-                        self.kick(f"Username '{name}' is taken")
+                    if c.name == self.name:
+                        self.kick(f"Username '{self.name}' is taken")
+                        log(f"{self.name} tried to connect, duplicate name")
                         return
 
                 if self.server.config.get("heartbeat_url", None):
@@ -1745,8 +1748,8 @@ class ServerState:
             c.message("&e/clients: List connected players")
         elif args[0] == "/clients":
             c.message("&eConnected players:")
-            for c in self.clients:
-                c.message(f"- {c.name} ({int((time.time() - c.connect_time) // 60)} minutes)")
+            for o in self.clients:
+                c.message(f"- {o.name} ({int((time.time() - o.connect_time) // 60)} minutes)")
         elif args[0] == "/gamemode" and (oper or creative):
             if len(args) < 2:
                 c.message(f"&eUsage: /gamemode (mode)")
