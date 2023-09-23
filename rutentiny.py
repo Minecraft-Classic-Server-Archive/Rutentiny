@@ -805,8 +805,8 @@ class Level:
                                           unpack("!ii", file.read(calcsize("!ii"))))
 
                 for i in range(0, 6):
-                    self.colors[i] = typing.cast(tuple[int, int, int],
-                                                 unpack("!BBB", file.read(3)))
+                    self.colors.append(typing.cast(tuple[int, int, int],
+                                                   unpack("!BBB", file.read(3))))
 
                 self.map = bytearray(file.read(self.xs * self.ys * self.zs))
             elif magic == b"rtm\x01":
@@ -826,8 +826,8 @@ class Level:
 
                 self.colors.clear()
                 for i in range(0, 6):
-                    self.colors[i] = typing.cast(tuple[int, int, int],
-                                                 unpack("!BBB", file.read(3)))
+                    self.colors.append(typing.cast(tuple[int, int, int],
+                                                   unpack("!BBB", file.read(3))))
 
                 spawnpoint_count, = unpack("!i", file.read(4))
 
@@ -1684,8 +1684,9 @@ class ServerState:
                     self.load_map(
                             self.config.get("map_path", ".") + "/" + path)
                     self.message(f"Loaded {path}")
-                except:
+                except Exception as e:
                     self.message(f"Failed to load {path}")
+                    log(f"{e}")
 
             case "save":
                 if len(args) < 2 or len(args) > 2:
