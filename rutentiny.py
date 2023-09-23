@@ -16,6 +16,7 @@ import socket
 import socketserver
 import textwrap
 import re
+import io
 from enum import IntEnum
 from struct import pack, unpack, calcsize
 from typing import NamedTuple, Optional, Iterator
@@ -58,7 +59,7 @@ def chunk_iter(data: bytes) -> Iterator[bytes]:
 try:
     import os
     os.makedirs("logs", exist_ok=True)
-    log_file = open(f"logs/{time.strftime('%Y-%m-%d')}.log", "a")
+    log_file: Optional[io.TextIOWrapper] = open(f"logs/{time.strftime('%Y-%m-%d')}.log", "a")
 except:
     log_file = None
 
@@ -364,7 +365,7 @@ class Client:
                 or old_armor != self.armor:
             self.health_update()
 
-    def packet(self):
+    def packet(self) -> None:
         try:
             op, = unpack("B", self.socket.recv(1))
         except:
@@ -391,23 +392,30 @@ class Client:
                     self.kick("Corrupted login packet")
                     return
 
-                if self.name in self.server.config.get("banned", []):
-                    self.kick("Banned")
-                    log(f"{self.name} tried to connect, banned")
-                    return
+                for ban in self.server.config.get("banned", []):
+                    if (isinstance(ban, str) and ban == self.name):
+                        self.kick("Banned")
+                        log(f"{self.name} tried to connect (banned)")
+                        return
+                    elif (isinstance(ban, tuple) and ban[0] == self.name):
+                        self.kick(f"Banned: {ban[1]}")
+                        log(f"{self.name} tried to connect (banned)")
+                        return
 
                 # always allow an oper to connect if possible
-                if (self.name in self.server.config.get("opers", []) \
-                        and len(self.server.clients) < 128) \
-                        or len(self.server.clients) >= self.server.max_clients:
+                maxc: int = self.server.max_clients
+                if self.name in self.server.config.get("opers", []):
+                    maxc = 128
+
+                if len(self.server.clients) >= self.server.max_clients:
                     self.kick("Server is full")
-                    log(f"{self.name} tried to connect, server full")
+                    log(f"{self.name} tried to connect (server full)")
                     return
 
                 for c in self.server.clients:
                     if c.name == self.name:
                         self.kick(f"Username '{self.name}' is taken")
-                        log(f"{self.name} tried to connect, duplicate name")
+                        log(f"{self.name} tried to connect (duplicate name)")
                         return
 
                 if self.server.config.get("heartbeat_url", None):
@@ -435,7 +443,7 @@ class Client:
                 self.server.add_client(self)
                 self.spawn(*self.server.level.get_spawnpoint())
                 self.set_gamemode(self.server.level.gamemode)
-                self.connect_time = time.time()
+                self.connect_time = int(time.time())
 
                 # we can dream
                 if ("UTF-8", 1) in self.cpe_exts:
@@ -1451,7 +1459,8 @@ class ServerState:
 
         self.clients = []
         self.alive = False
-        log_file.close()
+        if log_file is not None:
+            log_file.close()
 
     def send_id(self, c: Client) -> None:
         if c.name in self.config.get("opers", []):
@@ -2031,7 +2040,7 @@ class RequestHandler(socketserver.StreamRequestHandler):
                 client.packet()
             except Exception as e:
                 client.kick(f"Unhandled error: {e.__class__.__name__}")
-                log(e)
+                log(str(e))
 
 
 class ThreadedServer(socketserver.ThreadingTCPServer):
